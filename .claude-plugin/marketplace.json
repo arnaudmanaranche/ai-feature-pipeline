@@ -2,8 +2,8 @@
   "name": "ai-feature-pipeline",
   "owner": { "name": "AI Feature Pipeline" },
   "license": "MIT",
-  "homepage": "https://github.com/org/ai-feature-pipeline",
-  "repository": "https://github.com/org/ai-feature-pipeline",
+"homepage": "https://github.com/arnaudmanaranche/ai-feature-pipeline",
+"repository": "https://github.com/arnaudmanaranche/ai-feature-pipeline",
   "keywords": ["bmad", "feature-pipeline", "ai-workflow", "software-engineering"],
   "plugins": [
     {
