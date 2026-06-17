@@ -1,0 +1,83 @@
+code: afp
+name: 'AI Feature Pipeline'
+description: 'Multi-agent feature development pipeline'
+module_version: 1.0.0
+default_selected: true
+module_greeting: >
+  Welcome to the AI Feature Pipeline! Let's configure it for your project.
+
+project_name:
+  prompt: 'What is your project name?'
+  default: 'My Project'
+
+app_id:
+  prompt: 'What is your app bundle ID?'
+  default: 'com.example.app'
+
+github_repo:
+  prompt: 'What is your GitHub repository (org/repo)?'
+  default: 'org/repo'
+
+package_manager:
+  prompt: 'Which package manager do you use?'
+  default: 'npm'
+
+run_script:
+  prompt: 'How do you run TypeScript scripts? (e.g., tsx, ts-node)'
+  default: 'tsx'
+
+typecheck_cmd:
+  prompt: 'What is your typecheck command?'
+  default: 'tsc --noEmit'
+
+lint_cmd:
+  prompt: 'What is your lint command?'
+  default: 'eslint .'
+
+format_cmd:
+  prompt: 'What is your format check command?'
+  default: 'prettier --check .'
+
+format_write_cmd:
+  prompt: 'What is your format write command?'
+  default: 'prettier --write .'
+
+default_branch:
+  prompt: 'What is your default git branch name?'
+  default: 'main'
+
+branch_prefix:
+  prompt: 'What prefix do you use for feature branches?'
+  default: 'feat'
+
+locales:
+  prompt: 'Which locales do you support? (comma-separated)'
+  default: 'en'
+
+locale_dir:
+  prompt: 'Where are your locale files?'
+  default: 'i18n/locales'
+
+analytics_provider:
+  prompt: 'What analytics provider do you use?'
+  default: ''
+
+paywall_provider:
+  prompt: 'What paywall provider do you use?'
+  default: ''
+
+backend_service:
+  prompt: 'What backend/database service do you use?'
+  default: ''
+
+error_tracking:
+  prompt: 'What error tracking service do you use?'
+  default: ''
+
+e2e_framework:
+  prompt: 'What E2E testing framework do you use?'
+  default: ''
+
+e2e_dir:
+  prompt: 'Where are your E2E tests?'
+  default: 'e2e'

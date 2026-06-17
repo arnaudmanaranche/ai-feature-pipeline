@@ -1,0 +1,21 @@
+{
+  "name": "ai-feature-pipeline",
+  "owner": { "name": "AI Feature Pipeline" },
+  "license": "MIT",
+  "homepage": "https://github.com/org/ai-feature-pipeline",
+  "repository": "https://github.com/org/ai-feature-pipeline",
+  "keywords": ["bmad", "feature-pipeline", "ai-workflow", "software-engineering"],
+  "plugins": [
+    {
+      "name": "ai-feature-pipeline",
+      "source": "./",
+      "description": "Multi-agent feature development pipeline: PM → Architect → Dev → Review → QA",
+      "version": "1.0.0",
+      "author": { "name": "AI Feature Pipeline" },
+      "skills": [
+        "./skills/afp-setup",
+        "./skills/afp-pipeline"
+      ]
+    }
+  ]
+}
