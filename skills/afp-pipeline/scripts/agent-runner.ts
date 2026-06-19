@@ -211,14 +211,13 @@ function fileTree(dir: string, prefix = ''): string {
   try {
     const entries = readdirSync(fullPath, { withFileTypes: true });
     const lines: string[] = [];
-    const SKIP_DIRS = new Set([
-      'node_modules',
-      'ios',
-      'android',
-      'dist',
-      'build',
-      '.expo',
-    ]);
+    // Use project-configured skipDirs so the tree is stack-agnostic.
+    // Falls back to sensible defaults if config is unavailable.
+    const SKIP_DIRS = new Set(
+      CONFIG.skipDirs?.length
+        ? CONFIG.skipDirs
+        : ['node_modules', 'dist', 'build']
+    );
     const filtered = entries.filter(
       e => !e.name.startsWith('.') && !SKIP_DIRS.has(e.name)
     );
@@ -586,16 +585,27 @@ function buildUserPrompt(
     // so the Dev sees real code instead of hallucinating replacements
     const impactedFilePaths: string[] = [];
     if (techPlan) {
-      const fileRefs = techPlan.match(
-        /^- `([a-zA-Z0-9_./()/-]+\.(ts|tsx|js|jsx))`/gm
-      );
+      // Extract file paths from the tech plan. Matches backtick-quoted paths
+      // anywhere on a line (not just at line start) to handle varied formatting:
+      //   - `path/to/file.ts` — description
+      //   **`path/to/file.ts`** — description
+      //   - path/to/file.ts — description (no backticks, fallback)
+      const fileRefPattern = /`([a-zA-Z0-9_./@()/-]+\.(?:ts|tsx|js|jsx|css|json|yaml|yml|md))`/g;
+      const fileRefSet = new Set<string>();
+      let m: RegExpExecArray | null;
+      while ((m = fileRefPattern.exec(techPlan)) !== null) {
+        const p = m[1];
+        // Skip template paths and .ai artifact paths — those are not source files
+        if (!p.startsWith('.ai/') && !p.includes('{')) fileRefSet.add(p);
+      }
+      const fileRefs = fileRefSet.size > 0 ? [...fileRefSet] : null;
       if (fileRefs) {
         const seen = new Set<string>();
         sections.push(
           `\n## Existing files to modify\n\nBelow is the current content of each existing file you need to modify. Read them carefully — YOUR OUTPUT WILL REPLACE THE ENTIRE FILE, so you must preserve existing functionality and only add/change what's needed.\n`
         );
         for (const ref of fileRefs) {
-          const filePath = ref.match(/`([^`]+)`/)?.[1];
+          const filePath = ref;
           if (!filePath || seen.has(filePath)) continue;
           seen.add(filePath);
           impactedFilePaths.push(filePath);

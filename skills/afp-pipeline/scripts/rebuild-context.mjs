@@ -27,6 +27,11 @@ try {
 }
 const SKIP_DIRS = new Set(CONFIG.skipDirs || ['node_modules', 'dist', 'build']);
 const WATCH_DIRS = CONFIG.sourceDirs || ['src'];
+// Source extensions to index. Configurable via config.json `sourceExtensions`.
+// Defaults to TypeScript/JavaScript — add '.py', '.rb', '.go', etc. as needed.
+const SOURCE_EXTS = new Set(
+  CONFIG.sourceExtensions || ['.ts', '.tsx', '.js', '.jsx']
+);
 
 function globFiles(dir, base = dir) {
   const files = [];
@@ -39,7 +44,7 @@ function globFiles(dir, base = dir) {
         if (!SKIP_DIRS.has(entry) && !entry.startsWith('.')) {
           files.push(...globFiles(full, base));
         }
-      } else if (entry.endsWith('.ts') || entry.endsWith('.tsx')) {
+      } else if ([...SOURCE_EXTS].some(ext => entry.endsWith(ext))) {
         files.push(full);
       }
     }

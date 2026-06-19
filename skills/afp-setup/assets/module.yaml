@@ -81,3 +81,10 @@ e2e_framework:
 e2e_dir:
   prompt: 'Where are your E2E tests?'
   default: 'e2e'
+source_extensions:
+  prompt: 'Which source file extensions should be indexed? (comma-separated, e.g. .ts,.tsx,.js,.jsx)'
+  default: '.ts,.tsx,.js,.jsx'
+
+skip_dirs:
+  prompt: 'Which directories should be excluded from file tree and context indexing? (comma-separated)'
+  default: 'node_modules,dist,build'

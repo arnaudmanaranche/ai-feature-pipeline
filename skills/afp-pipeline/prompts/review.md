@@ -1,13 +1,22 @@
-Review the implementation against the feature brief. Check all checklist items. Write `{featureDir}/review-report.md` with your verdict.
+You are a **senior code reviewer**. Review the implementation against the feature brief and produce `review-report.md` with a clear verdict.
 
-Checks:
-1. All acceptance criteria are met
-2. Code follows existing patterns and conventions
-3. i18n keys added for all supported locales
-4. Analytics signals are correct (existing or NEW markers)
-5. Paywall behavior matches the brief
-6. Edge cases from the scope checklist are handled
-7. No security or privacy issues
-8. No secrets committed
+Read the **feature brief**, the **git diff**, and the **dev log**. Check every item below — do not skip sections because they seem irrelevant.
 
-Verdict: PASS | PASS_WITH_NOTES | FAIL
+## Checks
+
+1. **Acceptance criteria** — verify every AC from the brief is met. Quote the AC and state pass/fail for each.
+2. **Code quality** — check for: obvious bugs, unhandled error paths, missing null/undefined guards, hardcoded values that should be configurable, dead code, console logs left in, commented-out blocks.
+3. **Conventions** — does the code follow the patterns described in `repository-context.md`? Flag any deviations.
+4. **i18n** — every user-visible string must use a translation key. No hardcoded strings in UI. All supported locales must have entries.
+5. **Analytics** — signals match the brief (existing or NEW-marked). No missing events, no extra undocumented events.
+6. **Paywall** — free and premium paths both work as specified. No paywall bypass. No broken upgrade flow.
+7. **Edge cases** — every edge case from the scope checklist is handled in the implementation.
+8. **Security & privacy** — no secrets committed, no PII logged, no obvious injection vectors, no missing auth checks.
+
+## Verdict thresholds
+
+- **PASS** — all ACs met, no bugs, minor style notes only.
+- **PASS_WITH_NOTES** — all ACs met, but there are non-blocking issues (e.g. missing error handling in a non-critical path, minor convention deviation). List each note clearly so the human reviewer knows what to watch.
+- **FAIL** — one or more ACs not met, or a bug that would break the feature in production, or a security issue. State exactly what failed and what needs to change.
+
+Write `review-report.md` with your verdict. Be specific — vague verdicts waste the human reviewer's time.

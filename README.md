@@ -2,7 +2,7 @@
 
 A structured, multi-agent pipeline for AI-assisted feature development. **Model-agnostic, stack-agnostic.**
 
-PM → Architect → Dev → Review → QA — each role produces artifacts, gates, and handoffs.
+PM → Dev Review → Architect → Dev → Review → QA → Retro — each role produces artifacts, gates, and handoffs.
 
 ## Quick start
 
@@ -73,13 +73,15 @@ skills/
 
 ## Pipeline stages
 
-| Stage | Role | Produces |
-|-------|------|----------|
-| 1 | PM | `feature-brief.md` — requirements, AC, scope |
-| 2 | Architect | `technical-plan.md` + `repository-context.md` |
-| 3 | Dev | Code changes + `dev-log.md` |
-| 4 | Review | `review-report.md` — verdict PASS/FAIL |
-| 5 | QA | `qa-report.md` — verdict PASS/FAIL |
+| Stage | Role | Produces | Gate |
+|-------|------|----------|------|
+| 1 | PM | `feature-brief.md` — requirements, AC, scope | |
+| 2 | Dev Review | `pm-dev-thread.md` — clarification Q&A (loops up to 3×) | exits on `blocked` |
+| 3 | Architect | `technical-plan.md` + `repository-context.md` | |
+| 4 | Dev | Code changes + `dev-log.md` | typecheck gate, 1 retry |
+| 5 | Review | `review-report.md` — verdict PASS / PASS_WITH_NOTES / FAIL | FAIL halts before QA and PR |
+| 6 | QA | `qa-report.md` — verdict PASS / FAIL / BLOCKED_ENV | FAIL skips PR creation |
+| 7 | Retro | `retrospective.md` + `.ai/project-memory.md` | |
 
 ## Configuration
 

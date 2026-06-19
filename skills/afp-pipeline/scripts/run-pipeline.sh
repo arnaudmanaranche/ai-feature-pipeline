@@ -188,9 +188,34 @@ fi
 run_agent review
 git add -A && git commit --no-verify -m "agent(review): $SLUG" 2>/dev/null || true
 
+REVIEW_VERDICT=$(read_verdict review)
+if [ "$REVIEW_VERDICT" = "FAIL" ]; then
+  echo ""
+  echo "  Review verdict: FAIL — pipeline halted before QA and PR."
+  echo "  Fix the issues in $ARTIFACTS_DIR/review-report.md, then re-run the dev stage."
+  exit 1
+fi
+
 # 6. QA
 run_agent qa
 git add -A && git commit --no-verify -m "agent(qa): $SLUG" 2>/dev/null || true
+
+QA_VERDICT=$(read_verdict qa)
+if [ "$QA_VERDICT" = "FAIL" ]; then
+  echo ""
+  echo "  QA verdict: FAIL — pipeline will push branch but NOT create a PR."
+  echo "  See $ARTIFACTS_DIR/qa-report.md for details."
+  # Run retro so learnings are captured, but skip PR creation
+  run_agent retro
+  git add -A && git commit --no-verify -m "agent(retro): $SLUG" 2>/dev/null || true
+  if [ "$DRY_RUN" != "--dry-run" ]; then
+    git push origin "$BRANCH" 2>&1 || echo "Push failed"
+  fi
+  echo ""
+  echo "  Branch pushed: $BRANCH"
+  echo "  QA failed — no PR created. Fix QA issues before opening a PR manually."
+  exit 1
+fi
 
 # 7. Retrospective — compile session learnings
 run_agent retro
