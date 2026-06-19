@@ -1,2 +1,0 @@
-module,skill,display-name,menu-code,description,action,args,phase,preceded-by,followed-by,required,output-location,outputs
-AI Feature Pipeline,afp-setup,Setup Pipeline,AP,"Configure the AI Feature Pipeline for this project: collects project settings and generates config files.",setup,,anytime,,,,false,output_folder,config

@@ -40,18 +40,21 @@ Or through your AI tool: "Run the AFP Pipeline to scope a new feature."
 skills/
 ├── afp-setup/                  # First-time project configuration
 │   ├── SKILL.md
-│   └── assets/
-│       ├── module.yaml         # Config variables
-│       └── module-help.csv     # Help entries
+│   ├── assets/
+│   │   └── module.yaml         # Config variables
+│   └── scripts/
+│       └── detect-stack.mjs    # Auto-detects project stack
 │
 └── afp-pipeline/               # Main pipeline workflow
     ├── SKILL.md                # Workflow definition
     ├── prompts/                # Role-specific system prompts
     │   ├── pm.md
+    │   ├── dev-review.md
     │   ├── architect.md
     │   ├── dev.md
     │   ├── review.md
-    │   └── qa.md
+    │   ├── qa.md
+    │   └── retro.md
     ├── scripts/                # Automation
     │   ├── agent-runner.ts     # OpenRouter-based agent executor
     │   ├── rebuild-context.mjs # Source code scanner
@@ -61,14 +64,11 @@ skills/
     │   ├── ship-checklist.md
     │   ├── analytics-events.md
     │   └── paywall-touchpoints.md
-    └── templates/              # Artifact templates
-        ├── feature-brief.md
+    └── templates/              # Injected into .ai/ by afp-setup
+        ├── GOVERNANCE.md
+        ├── DENIED_ACTIONS.md
         ├── technical-plan.md
-        ├── repository-context.md
-        ├── dev-log.md
-        ├── review-report.md
-        ├── qa-report.md
-        └── retrospective.md
+        └── repository-context.md
 ```
 
 ## Pipeline stages

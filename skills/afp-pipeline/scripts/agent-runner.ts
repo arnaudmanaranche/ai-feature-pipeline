@@ -540,13 +540,13 @@ function buildUserPrompt(
     if (ctxData && !ctxData.startsWith('[file not found')) {
       sections.push(`## Architecture maps\n\n\`\`\`json\n${ctxData}\n\`\`\``);
     }
-    const techTmpl = read('.ai/artifacts/templates/technical-plan.md');
+    const techTmpl = read('skills/afp-pipeline/templates/technical-plan.md');
     if (techTmpl && !techTmpl.startsWith('[file not found')) {
       sections.push(
         `## Technical plan template\n\n\`\`\`markdown\n${techTmpl}\n\`\`\``
       );
     }
-    const repoCmpl = read('.ai/artifacts/templates/repository-context.md');
+    const repoCmpl = read('skills/afp-pipeline/templates/repository-context.md');
     if (repoCmpl && !repoCmpl.startsWith('[file not found')) {
       sections.push(
         `## Repository context template\n\n\`\`\`markdown\n${repoCmpl}\n\`\`\``
