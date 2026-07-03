@@ -70,6 +70,40 @@ setup_worktree() {
   fi
 }
 
+# --- Concurrency lock ---
+#
+# Two invocations for the same slug racing on the same worktree/branch would
+# corrupt each other's artifacts. Best-effort (mkdir is atomic on a single
+# filesystem, which covers the intended case: an accidental double-trigger
+# from a person or a misconfigured cron/CI, not distributed coordination).
+LOCK_DIR="$WORKTREE_ROOT/.locks"
+LOCK_PATH="$LOCK_DIR/$SLUG"
+mkdir -p "$LOCK_DIR"
+
+acquire_lock() {
+  if ! mkdir "$LOCK_PATH" 2>/dev/null; then
+    local held_pid=""
+    [ -f "$LOCK_PATH/pid" ] && held_pid=$(cat "$LOCK_PATH/pid" 2>/dev/null)
+    if [ -n "$held_pid" ] && ! kill -0 "$held_pid" 2>/dev/null; then
+      echo "==> Stale lock from dead process $held_pid — reclaiming."
+      rm -rf "$LOCK_PATH"
+      mkdir "$LOCK_PATH"
+    else
+      echo "  Another pipeline run is already in progress for slug '$SLUG' (pid ${held_pid:-unknown})."
+      echo "  If you're sure it isn't actually running, remove the lock manually: rm -rf $LOCK_PATH"
+      exit 1
+    fi
+  fi
+  echo "$$" > "$LOCK_PATH/pid"
+}
+
+release_lock() {
+  rm -rf "$LOCK_PATH"
+}
+
+acquire_lock
+trap release_lock EXIT
+
 setup_worktree
 PIPELINE_ROOT="$WORKTREE_DIR"
 
