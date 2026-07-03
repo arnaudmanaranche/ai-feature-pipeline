@@ -331,7 +331,7 @@ function buildSystemPrompt(role: string, skillContent: string) {
 
   const guidance = [
     isQa
-      ? `For QA: if Maestro results are provided in the context, use them to determine PASS/FAIL. If no results are available and you cannot run Maestro locally, use BLOCKED_ENV and note why — do not fabricate results.`
+      ? `For QA: if E2E results are provided in the context (from this project's own CI, for whatever framework it configured), use them to determine PASS/FAIL. If no results are available and you cannot run the E2E suite locally, use BLOCKED_ENV and note why — do not fabricate results.`
       : '',
     isDevReview
       ? `Guidelines:
@@ -357,6 +357,17 @@ ${guidance}
 
 You MUST respond by calling the \`submit_changes\` tool exactly once with your complete output — do not respond with plain text, explanations, or markdown outside the tool call. Every file and artifact you submit must contain its COMPLETE content: no placeholders, no partial snippets, no "// ... rest stays the same". The script writes files and artifacts exactly as you provide them.`;
 }
+
+// File-extension conventions per E2E framework, used only to filter the
+// "Existing E2E flows" listing shown to QA. An unrecognized/custom
+// framework name just lists every file in e2e.dir (empty pattern list).
+const E2E_FLOW_PATTERNS: Record<string, string[]> = {
+  maestro: ['.yaml', '.yml'],
+  playwright: ['.spec.ts', '.spec.js', '.test.ts', '.test.js'],
+  cypress: ['.cy.ts', '.cy.js'],
+  detox: ['.e2e.ts', '.e2e.js'],
+  webdriverio: ['.e2e.ts', '.e2e.js'],
+};
 
 function buildUserPrompt(
   role: string,
@@ -640,27 +651,47 @@ function buildUserPrompt(
     }
   }
 
-  // For QA: add Maestro flow info and real results
+  // For QA: framework-agnostic E2E flow listing + results contract. Which
+  // E2E tool a project uses (Maestro, Playwright, Cypress, Detox, ...) is
+  // entirely a project choice (`e2e.framework`/`e2e.dir` in .ai/config.json)
+  // — this module doesn't run any of them itself, since orchestrating a
+  // simulator/browser in CI is inherently framework- and infra-specific.
+  // What it standardizes is the single handoff contract: project-specific
+  // CI drops a `e2e-results.json` into the feature dir; QA reads it if
+  // present and is instructed never to fabricate a result if it's absent.
   if (role === 'qa') {
-    const maestroDir = 'e2e/maestro';
-    if (existsSync(join(getRoot(), maestroDir))) {
-      const flows = readdirSync(join(getRoot(), maestroDir)).filter(f =>
-        f.endsWith('.yaml')
-      );
+    const framework = CONFIG.e2e?.framework || '';
+    const e2eDir = CONFIG.e2e?.dir || 'e2e';
+    if (framework) {
       sections.push(
-        `## Existing Maestro flows\n\n${flows.map(f => `- \`${f}\``).join('\n')}`
+        `## E2E framework\n\n- Framework: \`${framework}\`\n- Test directory: \`${e2eDir}\``
+      );
+      const patterns = E2E_FLOW_PATTERNS[framework] ?? [];
+      if (existsSync(join(getRoot(), e2eDir))) {
+        const flows = readdirSync(join(getRoot(), e2eDir)).filter(f =>
+          patterns.length ? patterns.some(ext => f.endsWith(ext)) : true
+        );
+        sections.push(
+          `## Existing E2E flows\n\n${flows.map(f => `- \`${f}\``).join('\n')}`
+        );
+      }
+    } else {
+      sections.push(
+        `## E2E framework\n\nNo \`e2e.framework\` configured for this project. QA cannot verify E2E flows structurally — rely entirely on whether results are provided below, or on whether the brief has any E2E requirements at all.`
       );
     }
-    // Read real Maestro results if available (from pre-flight step)
-    const resultsPath = `${ctx.featureDir}/maestro-results.json`;
+
+    // Read real results if available (dropped by project-specific CI —
+    // this module never produces this file itself)
+    const resultsPath = `${ctx.featureDir}/e2e-results.json`;
     const resultsContent = read(resultsPath);
     if (resultsContent && !resultsContent.startsWith('[file not found')) {
       sections.push(
-        `## Maestro test results (from CI)\n\nThe following Maestro flows were executed on a real iOS Simulator. Use these actual results to write your report — do NOT fabricate results or default to BLOCKED_ENV.\n\n\`\`\`json\n${resultsContent}\n\`\`\``
+        `## E2E test results (from CI)\n\nThe following ${framework || 'E2E'} flows were executed by this project's own CI job. Use these actual results to write your report — do NOT fabricate results or default to BLOCKED_ENV.\n\n\`\`\`json\n${resultsContent}\n\`\`\``
       );
     } else {
       sections.push(
-        `## Maestro test results\n\nNo Maestro results file found at \`${resultsPath}\`. If you cannot run Maestro locally, use BLOCKED_ENV and explain why. If flows look correct based on the brief, you may use PASS.`
+        `## E2E test results\n\nNo results file found at \`${resultsPath}\`. This file is expected to be produced by the project's own CI job running its ${framework || 'configured'} E2E suite — this module does not execute E2E tests itself. If you cannot run the suite locally, use BLOCKED_ENV and explain why. Only use PASS without results if the brief genuinely has no E2E requirements for this feature.`
       );
     }
   }
@@ -684,7 +715,7 @@ Specifically:
 5. **Analytics** — pick existing signals from the registry or define new ones with \`(NEW)\` marker
 6. **Paywall** — specify free vs premium behavior per surface
 7. **Technical notes** — list files likely touched based on the directory tree
-8. **Maestro / QA** — describe step-by-step E2E flows
+8. **E2E / QA** — describe step-by-step E2E flows (in whatever framework this project has configured)
 9. **Scope** — answer every question from the **Scope checklist** registry in a dedicated "## Scope" section. List what is IN/OUT, entry points, side effects, edge cases, dependencies, data storage, and screens/navigation changes.
 
 IMPORTANT: Output the COMPLETE updated \`feature-brief.md\` in the ## Artifacts section. Do not skip sections. A weak brief wastes everyone's time.`,
@@ -771,11 +802,11 @@ IMPORTANT: If you do not output any files in the ## Files section, no code chang
     review: `Review the implementation against the feature brief. Check all checklist items. Write \`${ctx.featureDir}/review-report.md\` with your verdict.
 
 Additionally, check the git diff against the **Diagram** in the Architect's technical plan (provided above): does the actual control/data flow in the code match what the diagram describes? If the diagram shows step A calling B calling C and the diff shows a different order, a skipped step, or an extra untracked path, flag it explicitly in your report — a plan that "sounds right" in prose but was implemented differently in practice is exactly the failure mode this check exists to catch. Treat a real divergence as a FAIL, not a note, unless it's a trivial rename with no behavioral difference.`,
-    qa: `Review the Maestro E2E test plan from the brief and the actual Maestro test results provided in the context. Write \`${ctx.featureDir}/qa-report.md\`.
+    qa: `Review the E2E test plan from the brief and the actual E2E test results provided in the context (see the E2E framework and E2E test results sections above — this project's configured framework, whatever it is). Write \`${ctx.featureDir}/qa-report.md\`.
 
-If Maestro results are provided (from CI pre-flight), use the actual pass/fail data to write your report. Record each flow's result in the "Flows executed" table. Set verdict to PASS if all flows passed, FAIL if any failed, or BLOCKED_ENV only if results are genuinely unavailable.
+If E2E results are provided (from this project's own CI), use the actual pass/fail data to write your report. Record each flow's result in the "Flows executed" table. Set verdict to PASS if all flows passed, FAIL if any failed, or BLOCKED_ENV only if results are genuinely unavailable.
 
-If no Maestro results are available, explain why in BLOCKED_ENV and create/update \`${ctx.featureDir}/blocker.md\`.`,
+If no E2E results are available, explain why in BLOCKED_ENV and create/update \`${ctx.featureDir}/blocker.md\`.`,
     retro: `You are the **retrospective** agent. Your job is to compile a squad retrospective from all artifacts produced during this feature's pipeline.
 
 Read all available artifacts in \`${ctx.featureDir}/\`:
@@ -1356,11 +1387,12 @@ ${verdict === 'FAIL' ? 'Missing error handling on the settings toggle.' : 'All A
         {
           path: `${featureDir}/qa-report.md`,
           action: 'create',
-          content: `# QA report (Maestro)
+          content: `# QA report
 
 **Feature slug:** \`${slug}\`
 **Verdict:** PASS
 **Agent:** QA
+**E2E framework:** \`${CONFIG.e2e?.framework || 'none configured'}\`
 
 **App ID:** \`${CONFIG.project.appId}\`
 
@@ -1368,19 +1400,17 @@ ${verdict === 'FAIL' ? 'Missing error handling on the settings toggle.' : 'All A
 
 ## Flows executed
 
-| Flow file                     | Command            | Result |
-| ----------------------------- | ------------------ | ------ |
-| \`e2e/maestro/onboarding.yaml\` | \`maestro test ...\` | pass   |
+| Flow file                | Result |
+| ------------------------- | ------ |
+| \`e2e/onboarding.spec.ts\` | pass   |
 
 ## Environment
 
-- Platform: iOS Simulator
-- Build: Release
 - Locale: en
 
 ## BLOCKED_ENV
 
-N/A — Maestro ran successfully.
+N/A — E2E suite ran successfully.
 
 ## Notes for human MR
 

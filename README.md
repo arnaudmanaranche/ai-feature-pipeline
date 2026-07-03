@@ -129,6 +129,24 @@ The `dev` role in `.ai/agents.json` supports `typeSkills` (inject a coding-stand
 
 Before the Architect runs, `rebuild-context.mjs` scans `sourceDirs` and rebuilds `.ai/context.json` — a symbol index, per-file exports/imports, and a dependency map the Architect (and, indirectly, Dev) uses instead of re-discovering the codebase from scratch on every feature. When the target project has `typescript` installed, extraction goes through the real TypeScript compiler API (handles `export * from`, renamed re-exports, enums — things regex parsing misses); it falls back to regex extraction for plain-JS projects. Each file is fingerprinted by mtime, so unchanged files are never reparsed — only files that actually changed since the last run cost anything.
 
+### E2E verification (QA) is framework-agnostic by contract, not by running anything itself
+
+Which E2E tool a project uses — Maestro, Playwright, Cypress, Detox, WebdriverIO, or none — is a per-project choice (`e2e.framework` / `e2e.dir` in `.ai/config.json`, set by `afp-setup`). This module deliberately does **not** run any of them: orchestrating a simulator or browser in CI is inherently framework- and infra-specific, and hardcoding one would break the "stack-agnostic" premise for everyone not using that one framework.
+
+Instead, QA reads a single generic handoff file: `.ai/artifacts/features/<slug>/e2e-results.json`. **Your project's own CI is responsible for producing it** — run your configured E2E suite in whatever job already exists for that framework, then write the results in this shape before QA runs:
+
+```json
+{
+  "framework": "playwright",
+  "flows": [
+    { "file": "e2e/login.spec.ts", "result": "pass" },
+    { "file": "e2e/checkout.spec.ts", "result": "fail", "notes": "timeout waiting for #confirm-button" }
+  ]
+}
+```
+
+If this file is absent, QA is instructed to use `BLOCKED_ENV` rather than fabricate a result — unless the feature genuinely has no E2E requirements, in which case it may still PASS on brief review alone. If `e2e.framework` isn't configured at all, QA is told exactly that and falls back to the same brief-only judgment.
+
 ### Safety model
 
 - **Governance & denied actions** — `.ai/GOVERNANCE.md` and `.ai/DENIED_ACTIONS.md` (copied from `templates/` by `afp-setup`, editable per project) are injected into every single agent's prompt. They state role boundaries (e.g. only Dev writes source code), output rules (no placeholders, complete file contents only), and hard denials (no secrets, no direct pushes to the default branch, no disabling lint/typecheck inline without justification).
