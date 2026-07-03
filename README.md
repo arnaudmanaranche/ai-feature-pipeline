@@ -68,7 +68,9 @@ skills/
         ├── GOVERNANCE.md
         ├── DENIED_ACTIONS.md
         ├── technical-plan.md
-        └── repository-context.md
+        ├── repository-context.md
+        └── scripts/
+            └── new-feature.sh  # Copied to .ai/scripts/new-feature.sh
 ```
 
 ## Pipeline stages

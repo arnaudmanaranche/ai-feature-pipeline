@@ -26,10 +26,12 @@ MAX_LOOPS=3
 
 # Load config
 read_config() {
-  node -e "try{var c=JSON.parse(require('fs').readFileSync('$ROOT/.ai/config.json','utf-8'));var p='$1'.split('.');for(var k of p)c=c[k];console.log(c)}catch(e){console.log('$2')}"
+  # Strip a leading '.' before splitting — '.commands.typecheck'.split('.')
+  # otherwise yields a leading empty segment and every lookup silently
+  # falls through to the default value below, even when the key exists.
+  node -e "try{var c=JSON.parse(require('fs').readFileSync('$ROOT/.ai/config.json','utf-8'));var p='$1'.replace(/^\./,'').split('.');for(var k of p)c=c[k];if(c===undefined)throw new Error('undefined');console.log(c)}catch(e){console.log('$2')}"
 }
-PACKAGE_MANAGER=$(read_config ".commands.packageManager" "npm")
-RUN_SCRIPT=$(read_config ".commands.runScript" "tsx")
+RUN_SCRIPT=$(read_config ".commands.runScript" "npx tsx")
 TYPECHECK_CMD=$(read_config ".commands.typecheck" "tsc --noEmit")
 BRANCH_PREFIX=$(read_config ".project.branchPrefix" "feat")
 DEFAULT_BRANCH=$(read_config ".project.defaultBranch" "main")
@@ -44,7 +46,24 @@ run_agent() {
   echo "========================================="
   echo "  Running $role..."
   echo "========================================="
-  ${PACKAGE_MANAGER} ${RUN_SCRIPT} "$SCRIPT_DIR/agent-runner.ts" --role="$role" --slug="$SLUG" --project-root="$ROOT" $extra
+  ${RUN_SCRIPT} "$SCRIPT_DIR/agent-runner.ts" --role="$role" --slug="$SLUG" --project-root="$ROOT" $extra
+}
+
+# Commit staged agent output, honoring the project's pre-commit hooks.
+# Unlike --no-verify, a real hook rejection stops the pipeline instead of
+# silently continuing with unstaged/uncommitted agent output.
+commit_stage() {
+  local message="$1"
+  git add -A
+  if git diff --cached --quiet; then
+    return 0
+  fi
+  if ! git commit -m "$message"; then
+    echo ""
+    echo "  Commit rejected by pre-commit hook: $message"
+    echo "  Fix the hook failure (or the agent output that triggered it) before re-running."
+    exit 1
+  fi
 }
 
 read_verdict() {
@@ -84,13 +103,13 @@ fi
 
 # 1. PM writes feature brief
 run_agent pm
-git add -A && git commit --no-verify -m "agent(pm): $SLUG" 2>/dev/null || true
+commit_stage "agent(pm): $SLUG"
 
 # 2. Dev review + clarification loop
 loop=0
 while [ $loop -lt $MAX_LOOPS ]; do
   run_agent dev-review
-  git add -A && git commit --no-verify -m "agent(dev-review): $SLUG" 2>/dev/null || true
+  commit_stage "agent(dev-review): $SLUG"
 
   VERDICT=$(read_verdict)
 
@@ -105,7 +124,7 @@ while [ $loop -lt $MAX_LOOPS ]; do
     echo ""
     echo "  Dev has questions. Running PM respond..."
     run_agent pm-respond
-    git add -A && git commit --no-verify -m "agent(pm-respond): $SLUG" 2>/dev/null || true
+    commit_stage "agent(pm-respond): $SLUG"
     loop=$((loop + 1))
     continue
   fi
@@ -129,7 +148,7 @@ fi
 echo "==> Rebuilding context.json..."
 node "$SCRIPT_DIR/rebuild-context.mjs" --project-root="$ROOT"
 run_agent architect
-git add -A && git commit --no-verify -m "agent(architect): $SLUG" 2>/dev/null || true
+commit_stage "agent(architect): $SLUG"
 
 # 4. Dev implements with typecheck gate
 run_agent dev
@@ -139,7 +158,7 @@ TC_ATTEMPT=1
 while true; do
   if ${TYPECHECK_CMD} 2>/dev/null; then
     echo "  Typecheck passed (attempt $TC_ATTEMPT). Committing..."
-    git add -A && git commit --no-verify -m "agent(dev): $SLUG" 2>/dev/null || true
+    commit_stage "agent(dev): $SLUG"
     break
   fi
 
@@ -186,7 +205,7 @@ fi
 
 # 5. Review
 run_agent review
-git add -A && git commit --no-verify -m "agent(review): $SLUG" 2>/dev/null || true
+commit_stage "agent(review): $SLUG"
 
 REVIEW_VERDICT=$(read_verdict review)
 if [ "$REVIEW_VERDICT" = "FAIL" ]; then
@@ -198,7 +217,7 @@ fi
 
 # 6. QA
 run_agent qa
-git add -A && git commit --no-verify -m "agent(qa): $SLUG" 2>/dev/null || true
+commit_stage "agent(qa): $SLUG"
 
 QA_VERDICT=$(read_verdict qa)
 if [ "$QA_VERDICT" = "FAIL" ]; then
@@ -207,7 +226,7 @@ if [ "$QA_VERDICT" = "FAIL" ]; then
   echo "  See $ARTIFACTS_DIR/qa-report.md for details."
   # Run retro so learnings are captured, but skip PR creation
   run_agent retro
-  git add -A && git commit --no-verify -m "agent(retro): $SLUG" 2>/dev/null || true
+  commit_stage "agent(retro): $SLUG"
   if [ "$DRY_RUN" != "--dry-run" ]; then
     git push origin "$BRANCH" 2>&1 || echo "Push failed"
   fi
@@ -219,7 +238,7 @@ fi
 
 # 7. Retrospective — compile session learnings
 run_agent retro
-git add -A && git commit --no-verify -m "agent(retro): $SLUG" 2>/dev/null || true
+commit_stage "agent(retro): $SLUG"
 
 # 8. Push branch (skip dry-run)
 if [ "$DRY_RUN" != "--dry-run" ]; then

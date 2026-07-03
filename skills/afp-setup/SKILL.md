@@ -14,6 +14,7 @@ Run this skill when you first install the module in a project. It auto-detects t
 6. Creates `.ai/artifacts/features/` directory
 7. Copies registry files (scope-checklist, ship-checklist, analytics-events, paywall-touchpoints) into `.ai/registry/`
 8. Copies governance files (GOVERNANCE.md, DENIED_ACTIONS.md) from `skills/afp-pipeline/templates/` into `.ai/`
+9. Copies `skills/afp-pipeline/templates/scripts/new-feature.sh` into `.ai/scripts/new-feature.sh` and makes it executable (`chmod +x`) — `run-pipeline.sh` depends on this script to scaffold new feature folders
 
 ## Auto-detection
 

@@ -13,16 +13,17 @@ import {
   mkdirSync,
 } from 'fs';
 import { join, dirname } from 'path';
+import { pathToFileURL } from 'url';
 
-// Project root: default to cwd, override with --project-root
-const CMD_PROJECT_ROOT = (() => {
+// Project root: default to cwd, override with --project-root.
+// Resolved lazily (not cached) so tests can chdir() into a fixture root.
+function getRoot(): string {
   for (const arg of process.argv.slice(2)) {
     const m = arg.match(/^--project-root=(.+)$/);
     if (m) return m[1];
   }
   return process.cwd();
-})();
-const ROOT = CMD_PROJECT_ROOT;
+}
 
 // --- Project config ---
 
@@ -73,7 +74,7 @@ interface ProjectConfig {
 }
 
 function loadProjectConfig(): ProjectConfig {
-  const configPath = join(ROOT, '.ai/config.json');
+  const configPath = join(getRoot(), '.ai/config.json');
   try {
     return JSON.parse(readFileSync(configPath, 'utf-8'));
   } catch {
@@ -142,7 +143,7 @@ interface RoleConfig {
 }
 
 function loadRegistry(): Record<string, RoleConfig> {
-  const registryPath = join(ROOT, '.ai/agents.json');
+  const registryPath = join(getRoot(), '.ai/agents.json');
   try {
     const raw = readFileSync(registryPath, 'utf-8');
     const data = JSON.parse(raw);
@@ -153,7 +154,13 @@ function loadRegistry(): Record<string, RoleConfig> {
   }
 }
 
-const ROLES = loadRegistry();
+// Lazy — loadRegistry() exits the process if .ai/agents.json is missing,
+// which must not happen just from importing this module (e.g. in tests).
+let _roles: Record<string, RoleConfig> | null = null;
+function getRoles(): Record<string, RoleConfig> {
+  if (!_roles) _roles = loadRegistry();
+  return _roles;
+}
 
 // --- Utils ---
 
@@ -168,22 +175,22 @@ function parseArgs() {
 
   if (args['list-roles']) {
     console.log('Available roles:');
-    for (const [name, config] of Object.entries(ROLES)) {
+    for (const [name, config] of Object.entries(getRoles())) {
       console.log(`  ${name} — ${config.description} (${config.model})`);
     }
     process.exit(0);
   }
 
   if (!args.role || !args.slug) {
-    const validRoles = Object.keys(ROLES).join('|');
+    const validRoles = Object.keys(getRoles()).join('|');
     console.error(
       `Usage: node scripts/agent-runner.ts --role=<${validRoles}> --slug=<feature-slug> [--project-root=<path>] [--dry-run] [--list-roles]`
     );
     process.exit(1);
   }
-  if (!ROLES[args.role]) {
+  if (!getRoles()[args.role]) {
     console.error(
-      `Unknown role: ${args.role}. Valid: ${Object.keys(ROLES).join(', ')}`
+      `Unknown role: ${args.role}. Valid: ${Object.keys(getRoles()).join(', ')}`
     );
     process.exit(1);
   }
@@ -191,7 +198,7 @@ function parseArgs() {
 }
 
 function read(path: string): string {
-  const fullPath = join(ROOT, path);
+  const fullPath = join(getRoot(), path);
   try {
     return readFileSync(fullPath, 'utf-8');
   } catch {
@@ -200,14 +207,14 @@ function read(path: string): string {
 }
 
 function write(path: string, content: string) {
-  const fullPath = join(ROOT, path);
+  const fullPath = join(getRoot(), path);
   mkdirSync(dirname(fullPath), { recursive: true });
   writeFileSync(fullPath, content, 'utf-8');
   console.log(`  ✍️  ${path}`);
 }
 
 function fileTree(dir: string, prefix = ''): string {
-  const fullPath = join(ROOT, dir);
+  const fullPath = join(getRoot(), dir);
   try {
     const entries = readdirSync(fullPath, { withFileTypes: true });
     const lines: string[] = [];
@@ -245,12 +252,12 @@ function loadContext(role: string, slug: string) {
 
   const threadPath = `${featureDir}/pm-dev-thread.md`;
   const issueBodyPath = `${featureDir}/issue-body.md`;
-  const brief = existsSync(join(ROOT, briefPath)) ? read(briefPath) : null;
-  const devLog = existsSync(join(ROOT, devLogPath)) ? read(devLogPath) : null;
-  const pmDevThread = existsSync(join(ROOT, threadPath))
+  const brief = existsSync(join(getRoot(), briefPath)) ? read(briefPath) : null;
+  const devLog = existsSync(join(getRoot(), devLogPath)) ? read(devLogPath) : null;
+  const pmDevThread = existsSync(join(getRoot(), threadPath))
     ? read(threadPath)
     : null;
-  const issueBody = existsSync(join(ROOT, issueBodyPath))
+  const issueBody = existsSync(join(getRoot(), issueBodyPath))
     ? read(issueBodyPath)
     : null;
   const governance = read('.ai/GOVERNANCE.md');
@@ -299,115 +306,37 @@ function getMatchingTypeSkills(
 // --- Prompt building ---
 
 function buildSystemPrompt(role: string, skillContent: string) {
-  const isDev = role === 'dev';
-  const isReview = role === 'review';
   const isQa = role === 'qa';
   const isDevReview = role === 'dev-review';
   const isPmRespond = role === 'pm-respond';
 
-  return `You are the **${role.toUpperCase()}** agent. Follow the governance rules and context files for project-specific rules. Output your work as structured sections below.
-
-${skillContent}
-
-## Output format
-
-Always respond with plain sections as shown below. Do not wrap the output in a code block — write the sections directly.
-
-### Artifacts section
-
-Start with:
-
-## Artifacts
-
-### \`.ai/artifacts/features/<slug>/<artifact-file>\` (create | update)
-\`\`\`markdown
-Content of the artifact.
-\`\`\`
-
-Repeat for each artifact you create or update.
-
-${
-  isDev
-    ? `### Files section
-
-Then list every source file you create or modify:
-
-## Files
-
-### \`<path/to/file.tsx>\` (create | modify)
-\`\`\`tsx
-Full file content — the entire file, not just the diff.
-\`\`\`
-
-**You MUST output the COMPLETE content of every file you create or modify.** Do not use placeholders, comments like "// ... rest stays the same", or partial snippets. The script writes these files exactly as you provide them.
-
-Example:
-
-## Files
-
-### \`src/components/MyComponent.tsx\` (modify)
-\`\`\`tsx
-import { View, Text } from 'react-native';
-
-export function MyComponent() {
-  return (
-    <View>
-      <Text>Hello</Text>
-    </View>
-  );
-}
-\`\`\``
-    : ''
-}
-
-${
-  isDev
-    ? `### Verification section
-
-## Verification
-- lint: pass | fail | skip
-- typecheck: pass | fail | skip
-`
-    : ''
-}
-
-${
-  isReview || isQa
-    ? `### Verdict section
-
-## Verdict
-${isReview ? 'PASS | PASS_WITH_NOTES | FAIL' : 'PASS | FAIL | BLOCKED_ENV'}
-`
-    : ''
-}
-
-${
-  isDevReview || isPmRespond
-    ? `### Status section
-
-## Status
-${isDevReview ? 'clear | questions | blocked' : 'resolved | blocked'}
-`
-    : ''
-}
-
-${isQa ? `For QA: if Maestro results are provided in the context, use them to determine PASS/FAIL. If no results are available and you cannot run Maestro locally, use BLOCKED_ENV and note why.` : ''}
-
-${
-  isDevReview
-    ? `Guidelines:
+  const guidance = [
+    isQa
+      ? `For QA: if Maestro results are provided in the context, use them to determine PASS/FAIL. If no results are available and you cannot run Maestro locally, use BLOCKED_ENV and note why — do not fabricate results.`
+      : '',
+    isDevReview
+      ? `Guidelines:
 - Only mark **blocked** if the spec is genuinely ambiguous (unclear WHAT to build, not HOW).
 - For technical edge cases (timezones, scheduling, permission flows), assume the Dev can figure it out — mark **clear** unless the brief is truly missing.
 - If you have minor questions, mark **clear** and add them as resolved threads in pm-dev-thread.md.
 - Do NOT ask the same questions again if they've already been answered in a previous thread.
 
-If **blocked**, write \`.ai/artifacts/features/<slug>/blocker.md\` with the **"What we do not know"** section filled in. Do NOT leave placeholder sections empty. If **questions**, add a thread entry to \`.ai/artifacts/features/<slug>/pm-dev-thread.md\` with each question. If **clear**, simply state clear — no files needed.`
-    : ''
-}
+If **blocked**, submit a \`blocker.md\` artifact with the **"What we do not know"** section filled in. Do NOT leave placeholder sections empty. If **questions**, submit an updated \`pm-dev-thread.md\` artifact with each question added as a thread entry. If **clear**, submit an empty artifacts list.`
+      : '',
+    isPmRespond
+      ? `Read the open threads in \`pm-dev-thread.md\`. Answer each question, update \`feature-brief.md\` if needed, then mark threads **Resolved** in the submitted artifact. If you cannot resolve a thread, set status to **blocked** and submit a \`blocker.md\` artifact.`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 
-${isPmRespond ? `Read the open threads in \`pm-dev-thread.md\`. Answer each question, update \`feature-brief.md\` if needed, then mark threads **Resolved**. If you cannot resolve, set status to **blocked** and write \`blocker.md\`.` : ''}
+  return `You are the **${role.toUpperCase()}** agent. Follow the governance rules and context files for project-specific rules.
 
-Respond ONLY with the structured sections above. No preamble, no explanation.`;
+${skillContent}
+
+${guidance}
+
+You MUST respond by calling the \`submit_changes\` tool exactly once with your complete output — do not respond with plain text, explanations, or markdown outside the tool call. Every file and artifact you submit must contain its COMPLETE content: no placeholders, no partial snippets, no "// ... rest stays the same". The script writes files and artifacts exactly as you provide them.`;
 }
 
 function buildUserPrompt(
@@ -473,7 +402,7 @@ function buildUserPrompt(
       }
     }
     // Also load agent response logs
-    const agentResponseDir = join(ROOT, ctx.featureDir);
+    const agentResponseDir = join(getRoot(), ctx.featureDir);
     if (existsSync(agentResponseDir)) {
       const entries = readdirSync(agentResponseDir);
       const responseLogs = entries.filter(
@@ -559,7 +488,7 @@ function buildUserPrompt(
     // Load extra skills from registry
     if (config.extraSkills) {
       for (const skillPath of config.extraSkills) {
-        if (existsSync(join(ROOT, skillPath))) {
+        if (existsSync(join(getRoot(), skillPath))) {
           const skillName =
             skillPath.split('/').pop()?.replace('.md', '') ?? 'standards';
           sections.push(
@@ -674,8 +603,8 @@ function buildUserPrompt(
   // For QA: add Maestro flow info and real results
   if (role === 'qa') {
     const maestroDir = 'e2e/maestro';
-    if (existsSync(join(ROOT, maestroDir))) {
-      const flows = readdirSync(join(ROOT, maestroDir)).filter(f =>
+    if (existsSync(join(getRoot(), maestroDir))) {
+      const flows = readdirSync(join(getRoot(), maestroDir)).filter(f =>
         f.endsWith('.yaml')
       );
       sections.push(
@@ -842,14 +771,143 @@ After writing the feature retrospective, also append key learnings to \`.ai/proj
   return sections.join('\n\n---\n\n');
 }
 
+// --- Structured output schema ---
+//
+// The model's entire output is validated against a JSON Schema via
+// OpenRouter tool-calling (forced `submit_changes` call) instead of being
+// parsed out of free-form markdown. This removes an entire class of
+// silent-failure bugs where a model that drifts slightly from a prose
+// format used to produce 0 parsed files/artifacts without erroring.
+
+interface FileChange {
+  path: string;
+  action: 'create' | 'modify' | 'delete';
+  content: string;
+}
+
+interface ArtifactChange {
+  path: string;
+  action: 'create' | 'update';
+  content: string;
+}
+
+interface AgentResult {
+  files: FileChange[];
+  artifacts: ArtifactChange[];
+  verdict: string;
+  raw: string;
+}
+
+const FILE_ITEM_SCHEMA = {
+  type: 'object',
+  properties: {
+    path: { type: 'string', description: 'Repo-relative source file path.' },
+    action: { type: 'string', enum: ['create', 'modify', 'delete'] },
+    content: {
+      type: 'string',
+      description:
+        'The COMPLETE file content (not a diff). Empty string for delete.',
+    },
+  },
+  required: ['path', 'action', 'content'],
+  additionalProperties: false,
+};
+
+const ARTIFACT_ITEM_SCHEMA = {
+  type: 'object',
+  properties: {
+    path: {
+      type: 'string',
+      description:
+        'Path under .ai/artifacts/features/<slug>/ or .ai/project-memory.md.',
+    },
+    action: { type: 'string', enum: ['create', 'update'] },
+    content: { type: 'string' },
+  },
+  required: ['path', 'action', 'content'],
+  additionalProperties: false,
+};
+
+// Roles without an entry here don't submit a verdict/status field.
+const VERDICT_ENUM_BY_ROLE: Record<string, string[]> = {
+  'dev-review': ['clear', 'questions', 'blocked'],
+  'pm-respond': ['resolved', 'blocked'],
+  review: ['PASS', 'PASS_WITH_NOTES', 'FAIL'],
+  qa: ['PASS', 'FAIL', 'BLOCKED_ENV'],
+};
+
+function buildToolSchema(role: string): object {
+  const verdictEnum = VERDICT_ENUM_BY_ROLE[role];
+  const properties: Record<string, unknown> = {
+    artifacts: {
+      type: 'array',
+      items: ARTIFACT_ITEM_SCHEMA,
+      description: 'Markdown artifacts to create or update.',
+    },
+  };
+  const required = ['artifacts'];
+
+  if (role === 'dev') {
+    properties.files = {
+      type: 'array',
+      items: FILE_ITEM_SCHEMA,
+      description: 'Complete source files to create or modify.',
+    };
+    required.push('files');
+  }
+
+  if (verdictEnum) {
+    properties.verdict = { type: 'string', enum: verdictEnum };
+    required.push('verdict');
+  }
+
+  return {
+    type: 'object',
+    properties,
+    required,
+    additionalProperties: false,
+  };
+}
+
+function buildTool(role: string) {
+  return {
+    type: 'function',
+    function: {
+      name: 'submit_changes',
+      description: `Submit the ${role} agent's complete output for this run.`,
+      parameters: buildToolSchema(role),
+    },
+  };
+}
+
+function parseToolArgs(argsRaw: string, role: string): AgentResult {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(argsRaw);
+  } catch (err) {
+    console.error(
+      `Failed to parse submit_changes arguments as JSON for role ${role}: ${err}`
+    );
+    console.error(argsRaw);
+    process.exit(1);
+  }
+  return {
+    files: Array.isArray(parsed.files) ? parsed.files : [],
+    artifacts: Array.isArray(parsed.artifacts) ? parsed.artifacts : [],
+    verdict: typeof parsed.verdict === 'string' ? parsed.verdict : '',
+    raw: argsRaw,
+  };
+}
+
 // --- OpenRouter API ---
 
 async function callOpenRouter(
+  role: string,
   model: string,
   systemPrompt: string,
   userPrompt: string,
   maxTokens: number
-) {
+): Promise<AgentResult> {
   const apiKey = process.env[CONFIG.openRouter.apiKeyEnv];
   if (!apiKey) {
     console.error(`Error: ${CONFIG.openRouter.apiKeyEnv} env var is required`);
@@ -859,6 +917,7 @@ async function callOpenRouter(
   const RETRYABLE = new Set([429, 500, 502, 503]);
   const MAX_RETRIES = 3;
   const BASE_DELAY = 2000;
+  const tool = buildTool(role);
 
   console.log(`  Model: ${model}`);
   console.log(`  System prompt: ~${systemPrompt.length} chars`);
@@ -881,6 +940,11 @@ async function callOpenRouter(
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
+          tools: [tool],
+          tool_choice: {
+            type: 'function',
+            function: { name: 'submit_changes' },
+          },
           max_tokens: maxTokens,
           temperature: 0.3,
         }),
@@ -889,18 +953,15 @@ async function callOpenRouter(
 
     if (response.ok) {
       const data = await response.json();
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        console.error('OpenRouter returned empty response');
+      const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+      const argsRaw = toolCall?.function?.arguments;
+      if (!argsRaw) {
+        console.error('OpenRouter returned no submit_changes tool call');
         console.error(JSON.stringify(data, null, 2));
         process.exit(1);
       }
-      console.log(`  Response: ${content.length} chars`);
-      const preview = content.slice(0, 2000);
-      console.log(
-        `  --- Response preview ---\n${preview}\n  --- end preview ---`
-      );
-      return content;
+      console.log(`  Tool call arguments: ${argsRaw.length} chars`);
+      return parseToolArgs(argsRaw, role);
     }
 
     lastError = await response.text();
@@ -918,188 +979,6 @@ async function callOpenRouter(
 
   console.error(`OpenRouter API error (exhausted retries): ${lastError}`);
   process.exit(1);
-
-  console.log(`  Response: ${content.length} chars`);
-  // Print first 2000 chars of response for CI log debugging
-  const preview = content.slice(0, 2000);
-  console.log(`  --- Response preview ---\n${preview}\n  --- end preview ---`);
-  return content;
-}
-
-// --- Response parsing ---
-
-interface FileChange {
-  path: string;
-  action: 'create' | 'modify' | 'delete';
-  content: string;
-}
-
-interface ArtifactChange {
-  path: string;
-  action: 'create' | 'update';
-  content: string;
-}
-
-function splitSections(text: string, headerPrefix = '## '): string[] {
-  const sections: string[] = [];
-  let current = '';
-  let inFence = false;
-  for (const line of text.split('\n')) {
-    if (line.startsWith('```')) inFence = !inFence;
-    if (!inFence && line.startsWith(headerPrefix) && current) {
-      sections.push(current);
-      current = '';
-    }
-    current += (current ? '\n' : '') + line;
-  }
-  if (current) sections.push(current);
-  return sections;
-}
-
-function parseResponse(response: string, slug: string) {
-  const files: FileChange[] = [];
-  const artifacts: ArtifactChange[] = [];
-  let verdict = '';
-
-  const sections = splitSections(response);
-
-  for (const section of sections) {
-    if (section.startsWith('## Files')) {
-      parseFileBlocks(section, files);
-    } else if (section.startsWith('## Artifacts')) {
-      parseArtifactBlocks(section, artifacts);
-    } else if (section.startsWith('## Verdict')) {
-      const match = section.match(/^## Verdict\n\n(.+)/m);
-      if (match) verdict = match[1].trim();
-    } else if (section.startsWith('## Status')) {
-      const match = section.match(/^## Status\s*\n\s*(.+)/m);
-      if (match) verdict = match[1].trim();
-    }
-  }
-
-  // Fallback: if no ## Files/Artifacts section found, try to find fenced code blocks
-  // anywhere in the response that look like files
-  if (files.length === 0 && artifacts.length === 0) {
-    fallbackParse(response, files, artifacts, verdict, slug);
-  }
-
-  return { files, artifacts, verdict };
-}
-
-function parseFileBlocks(section: string, files: FileChange[]) {
-  const blocks = splitSections(section, '### ');
-  for (const block of blocks) {
-    // Skip the section header itself
-    if (block.trim() === section.trim()) continue;
-    // Primary: ### `path` (action)
-    const match = block.match(
-      /^### `([^`]+)`\s*(?:\(([^)]+)\))?\n*```\w*\n([\s\S]*?)```/m
-    );
-    if (match) {
-      files.push({
-        path: match[1],
-        action: (match[2] || 'modify') as 'create' | 'modify' | 'delete',
-        content: match[3],
-      });
-    }
-  }
-}
-
-function parseArtifactBlocks(section: string, artifacts: ArtifactChange[]) {
-  const blocks = splitSections(section, '### ');
-  for (const block of blocks) {
-    const match = block.match(
-      /^### `([^`]+)`\s*(?:\(([^)]+)\))?\n*```\w*\n([\s\S]*?)```/m
-    );
-    if (match) {
-      artifacts.push({
-        path: match[1],
-        action: (match[2] || 'update') as 'create' | 'update',
-        content: match[3],
-      });
-    }
-  }
-}
-
-function fallbackParse(
-  response: string,
-  files: FileChange[],
-  artifacts: ArtifactChange[],
-  verdict: string,
-  slug: string
-) {
-  // Find all fenced code blocks
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-  let match;
-  const orphanBlocks: string[] = [];
-  while ((match = codeBlockRegex.exec(response)) !== null) {
-    const content = match[2].trim();
-    if (!content || content.length < 10) continue;
-
-    const firstLine = content.split('\n')[0];
-
-    // Check if first line looks like a file path comment
-    // e.g. // path/to/file.ts, # path/to/file.ts, <!-- path/to/file.ts -->
-    const pathMatch = firstLine.match(
-      /^(?:\/\/|#|<!--)\s*([\w./-]+\.\w+)\s*(?:-->)?$/
-    );
-    if (pathMatch) {
-      const path = pathMatch[1];
-      if (path.startsWith('.ai/artifacts/')) {
-        artifacts.push({
-          path,
-          action: 'create',
-          content: removeFirstLine(content),
-        });
-      } else {
-        files.push({
-          path,
-          action: 'modify',
-          content: removeFirstLine(content),
-        });
-      }
-    } else {
-      // Save code blocks without a path comment — may be orphan artifact content
-      orphanBlocks.push(content);
-    }
-  }
-
-  // If no artifacts were found but verdict suggests they should exist,
-  // promote orphan code blocks as the appropriate artifact files
-  if (artifacts.length === 0 && orphanBlocks.length > 0) {
-    const featureDir = `.ai/artifacts/features/${slug}`;
-    if (verdict === 'blocked') {
-      artifacts.push({
-        path: `${featureDir}/blocker.md`,
-        action: 'create',
-        content: orphanBlocks[0],
-      });
-      console.log(`  ℹ️  Fallback: promoted code block as blocker.md`);
-    } else if (verdict === 'questions') {
-      artifacts.push({
-        path: `${featureDir}/pm-dev-thread.md`,
-        action: 'update',
-        content: orphanBlocks[0],
-      });
-      console.log(`  ℹ️  Fallback: promoted code block as pm-dev-thread.md`);
-    }
-  }
-
-  // Log unfixable blocks for debugging
-  if (files.length === 0 && artifacts.length === 0) {
-    const blocks = response.match(/```[\s\S]*?```/g) || [];
-    if (blocks.length > 0) {
-      console.log(
-        `  ⚠️  Found ${blocks.length} code block(s) but couldn't parse paths`
-      );
-    }
-  }
-}
-
-function removeFirstLine(content: string): string {
-  const lines = content.split('\n');
-  lines.shift();
-  return lines.join('\n').trim();
 }
 
 // --- Permissions ---
@@ -1201,7 +1080,7 @@ function applyChanges(
       console.log(`  ⏭️  ${file.path} (skipped — dry run)`);
       continue;
     }
-    if (action === 'delete' && existsSync(join(ROOT, file.path))) {
+    if (action === 'delete' && existsSync(join(getRoot(), file.path))) {
       console.log(`  🗑️  ${file.path} (skipped delete — manual)`);
     } else {
       write(file.path, file.content);
@@ -1216,13 +1095,19 @@ function applyChanges(
 
 // --- Main ---
 
-function mockResponse(role: string, slug: string): string {
-  if (role === 'pm') {
-    return `## Artifacts
+function mockResponse(role: string, slug: string): AgentResult {
+  const featureDir = `.ai/artifacts/features/${slug}`;
+  const base = { files: [] as FileChange[], artifacts: [] as ArtifactChange[], verdict: '', raw: '[dry-run mock]' };
 
-### \`.ai/artifacts/features/${slug}/feature-brief.md\` (create)
-\`\`\`markdown
-# Feature brief
+  if (role === 'pm') {
+    return {
+      ...base,
+      verdict: 'clear',
+      artifacts: [
+        {
+          path: `${featureDir}/feature-brief.md`,
+          action: 'create',
+          content: `# Feature brief
 
 **Feature slug:** ${slug}
 **Tier:** M
@@ -1250,80 +1135,86 @@ Users cannot currently do X, which causes frustration.
 ## Technical notes
 
 - Files likely touched: \`app/(tabs)/settings.tsx\`, \`components/my-component.tsx\`
-\`\`\`
-
-## Status
-
-clear`;
+`,
+        },
+      ],
+    };
   }
   if (role === 'dev-review') {
-    return `## Status
-
-questions
-
-## Artifacts
-
-### \`.ai/artifacts/features/${slug}/pm-dev-thread.md\` (update)
-\`\`\`markdown
-### Thread-1 — Missing AC for edge cases
+    return {
+      ...base,
+      verdict: 'questions',
+      artifacts: [
+        {
+          path: `${featureDir}/pm-dev-thread.md`,
+          action: 'update',
+          content: `### Thread-1 — Missing AC for edge cases
 
 **Status:** Open
 
 **Question:** What happens when the user has no network connection?
-\`\`\``;
+`,
+        },
+      ],
+    };
   }
   if (role === 'dev') {
-    return `## Files
-
-### \`app/(tabs)/settings.tsx\` (modify)
-\`\`\`tsx
-import { View, Text } from 'react-native';
+    return {
+      ...base,
+      files: [
+        {
+          path: 'app/(tabs)/settings.tsx',
+          action: 'modify',
+          content: `import { View, Text } from 'react-native';
 export default function Settings() {
   return <View><Text>Hello</Text></View>;
 }
-\`\`\`
-
-### \`i18n/locales/en.ts\` (modify)
-\`\`\`ts
-export default { title: "My Feature" };
-\`\`\`
-
-## Artifacts
-
-### \`.ai/artifacts/features/${slug}/dev-log.md\` (create)
-\`\`\`markdown
-Implemented feature X. Modified settings screen.
-\`\`\``;
+`,
+        },
+        {
+          path: 'i18n/locales/en.ts',
+          action: 'modify',
+          content: `export default { title: "My Feature" };\n`,
+        },
+      ],
+      artifacts: [
+        {
+          path: `${featureDir}/dev-log.md`,
+          action: 'create',
+          content: 'Implemented feature X. Modified settings screen.\n',
+        },
+      ],
+    };
   }
   if (role === 'review') {
-    return `## Verdict
-
-PASS
-
-## Artifacts
-
-### \`.ai/artifacts/features/${slug}/review-report.md\` (create)
-\`\`\`markdown
-# Review report
+    return {
+      ...base,
+      verdict: 'PASS',
+      artifacts: [
+        {
+          path: `${featureDir}/review-report.md`,
+          action: 'create',
+          content: `# Review report
 
 **Verdict:** PASS
 All AC checked, code is clean.
-\`\`\``;
+`,
+        },
+      ],
+    };
   }
   if (role === 'qa') {
-    return `## Verdict
-
-PASS
-
-## Artifacts
-
-### \`.ai/artifacts/features/${slug}/qa-report.md\` (create)
-\`\`\`markdown
-# QA report (Maestro)
+    return {
+      ...base,
+      verdict: 'PASS',
+      artifacts: [
+        {
+          path: `${featureDir}/qa-report.md`,
+          action: 'create',
+          content: `# QA report (Maestro)
 
 **Feature slug:** \`${slug}\`
 **Verdict:** PASS
-**Date:** ${new Date().toISOString().split('T')[0]}
 **Agent:** QA
 
 **App ID:** \`${CONFIG.project.appId}\`
@@ -1349,15 +1240,18 @@ N/A — Maestro ran successfully.
 ## Notes for human MR
 
 - All flows passed.
-\`\`\``;
+`,
+        },
+      ],
+    };
   }
-  return '## Status\n\nclear';
+  return { ...base, verdict: 'clear' };
 }
 
 async function main() {
   const args = parseArgs();
   const { role, slug } = args;
-  const config = ROLES[role];
+  const config = getRoles()[role];
   const isDryRun = args['dry-run'] === 'true';
 
   // Allow env var override per role: OPENROUTER_MODEL_PM, OPENROUTER_MODEL_DEV, etc.
@@ -1385,27 +1279,25 @@ async function main() {
   const systemPrompt = buildSystemPrompt(role, skillContent);
   const userPrompt = buildUserPrompt(role, slug, ctx, config);
 
-  // 4. Call OpenRouter (or use mock for dry-run)
-  let response: string;
+  // 4. Call OpenRouter (or use mock for dry-run) — output is already
+  // schema-validated JSON from the submit_changes tool call, no parsing step.
+  let result: AgentResult;
   if (isDryRun) {
     console.log('  DRY RUN — using mock response');
-    response = mockResponse(role, slug);
-    console.log(`  Mock response: ${response.length} chars`);
+    result = mockResponse(role, slug);
   } else {
     console.log('  Calling OpenRouter...');
-    response = await callOpenRouter(
+    result = await callOpenRouter(
+      role,
       config.model,
       systemPrompt,
       userPrompt,
       config.maxTokens
     );
   }
+  const { files, artifacts, verdict } = result;
 
-  // 5. Parse response
-  console.log('  Parsing response...');
-  const { files, artifacts, verdict } = parseResponse(response, slug);
-
-  // Save raw response for debugging
+  // Save raw tool-call arguments for debugging
   const responseLogPath = `${ctx.featureDir}/.agent-${role}-response.md`;
   write(
     responseLogPath,
@@ -1413,7 +1305,7 @@ async function main() {
       `## Verdict\n\n${verdict || 'none'}\n\n` +
       `## Files found\n\n${files.length}\n\n` +
       `## Artifacts found\n\n${artifacts.length}\n\n` +
-      `## Raw response\n\n${response}`
+      `## Raw submit_changes arguments\n\n\`\`\`json\n${result.raw}\n\`\`\`\n`
   );
 
   // Write machine-readable status flag for the workflow
@@ -1460,7 +1352,24 @@ async function main() {
   );
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+const isMain =
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url;
+
+if (isMain) {
+  main().catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
+
+export {
+  checkPermissions,
+  getMatchingTypeSkills,
+  buildToolSchema,
+  buildTool,
+  parseToolArgs,
+  mockResponse,
+  applyChanges,
+};
+export type { FileChange, ArtifactChange, AgentResult };

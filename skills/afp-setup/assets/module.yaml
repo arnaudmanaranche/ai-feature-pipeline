@@ -23,8 +23,8 @@ package_manager:
   default: 'npm'
 
 run_script:
-  prompt: 'How do you run TypeScript scripts? (e.g., tsx, ts-node)'
-  default: 'tsx'
+  prompt: 'How do you run TypeScript scripts? (must be a full runnable command, e.g. "npx tsx", "pnpm exec tsx", "ts-node")'
+  default: 'npx tsx'
 
 typecheck_cmd:
   prompt: 'What is your typecheck command?'
