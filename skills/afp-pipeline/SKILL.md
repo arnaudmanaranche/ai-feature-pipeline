@@ -29,6 +29,7 @@ Each stage produces an artifact in `.ai/artifacts/features/<slug>/`.
 ### 3. Architect — Software Architect
 **Prompt:** `prompts/architect.md`
 **Output:** `technical-plan.md` + `repository-context.md` — architecture, impacted files, risks, implementation order
+**Gate:** Design gate. The pipeline pauses (exit 0) immediately after this stage — no code is written until a human has read the plan and re-runs with `--approve-design` (or the flag `.ai/artifacts/features/<slug>/.architect-approved` already exists from a prior approved run).
 
 ### 4. Dev — Developer
 **Prompt:** `prompts/dev.md`
@@ -38,7 +39,7 @@ Each stage produces an artifact in `.ai/artifacts/features/<slug>/`.
 ### 5. Review — Code Reviewer
 **Prompt:** `prompts/review.md`
 **Output:** `review-report.md` — checks implementation against the brief
-**Gate:** FAIL verdict halts the pipeline before QA and PR creation.
+**Gate:** FAIL verdict feeds the review findings back to Dev for one retry pass (typecheck re-runs, then Review runs again). Still FAIL after the retry halts the pipeline before QA and PR creation.
 
 ### 6. QA — Quality Assurance
 **Prompt:** `prompts/qa.md`
@@ -60,8 +61,14 @@ node scripts/agent-runner.ts --role=<role> --slug=<slug> --project-root=<path>
 Or run the full pipeline:
 
 ```bash
-bash scripts/run-pipeline.sh <slug> [issue-body.md] [--dry-run] [--project-root=<path>]
+bash scripts/run-pipeline.sh <slug> [issue-body.md] [--dry-run] [--approve-design] [--project-root=<path>]
 ```
+
+`--approve-design` skips the design gate (see stage 3) — pass it when the technical plan was already reviewed and approved out of band (e.g. a human approved the design-only commit/PR from a prior run). Without it, the pipeline stops after the Architect stage and tells you how to resume.
+
+## Workspace isolation
+
+Every run — including `--dry-run` — executes inside a dedicated git worktree at `<parent-of-project-root>/.afp-worktrees/<project>-<slug>`, never in your active working directory. This makes the run fully reversible: delete the worktree, delete the branch, or both, without touching your own uncommitted work. The worktree is removed automatically once the pipeline reaches a PR; it is left in place (path printed to stdout) whenever the pipeline halts on a blocker, a failed gate, or exhausted retries, so you can inspect or resume from it directly.
 
 ## Registries
 

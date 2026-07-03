@@ -579,6 +579,14 @@ function buildUserPrompt(
         `\n## Typecheck errors (previous attempt)\n\nFix ALL of these TypeScript errors:\n\`\`\`\n${typecheckFeedback}\n\`\`\``
       );
     }
+
+    // Review feedback (for Dev retry after a Review FAIL verdict)
+    const reviewFeedback = read(`${ctx.featureDir}/.agent-review-feedback.md`);
+    if (reviewFeedback && !reviewFeedback.startsWith('[file not found')) {
+      sections.push(
+        `\n## Review findings (previous attempt failed review)\n\nThe Review agent FAILED your previous implementation. Address every issue below before resubmitting:\n\`\`\`markdown\n${reviewFeedback}\n\`\`\``
+      );
+    }
   }
 
   // Git diff (Review only)
@@ -1187,17 +1195,20 @@ export default function Settings() {
     };
   }
   if (role === 'review') {
+    // Test seam: dry-run only. Lets run-pipeline.sh's Review→Dev retry loop
+    // be exercised end-to-end without a real model returning FAIL.
+    const verdict = process.env.AFP_MOCK_REVIEW_VERDICT || 'PASS';
     return {
       ...base,
-      verdict: 'PASS',
+      verdict,
       artifacts: [
         {
           path: `${featureDir}/review-report.md`,
           action: 'create',
           content: `# Review report
 
-**Verdict:** PASS
-All AC checked, code is clean.
+**Verdict:** ${verdict}
+${verdict === 'FAIL' ? 'Missing error handling on the settings toggle.' : 'All AC checked, code is clean.'}
 `,
         },
       ],

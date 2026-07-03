@@ -79,11 +79,13 @@ skills/
 |-------|------|----------|------|
 | 1 | PM | `feature-brief.md` — requirements, AC, scope | |
 | 2 | Dev Review | `pm-dev-thread.md` — clarification Q&A (loops up to 3×) | exits on `blocked` |
-| 3 | Architect | `technical-plan.md` + `repository-context.md` | |
+| 3 | Architect | `technical-plan.md` + `repository-context.md` | **Design gate** — pipeline pauses (exit 0) until a human reviews the plan and re-runs with `--approve-design` |
 | 4 | Dev | Code changes + `dev-log.md` | typecheck gate, 1 retry |
-| 5 | Review | `review-report.md` — verdict PASS / PASS_WITH_NOTES / FAIL | FAIL halts before QA and PR |
+| 5 | Review | `review-report.md` — verdict PASS / PASS_WITH_NOTES / FAIL | FAIL feeds findings back to Dev, 1 retry; halts before QA and PR if still FAIL |
 | 6 | QA | `qa-report.md` — verdict PASS / FAIL / BLOCKED_ENV | FAIL skips PR creation |
 | 7 | Retro | `retrospective.md` + `.ai/project-memory.md` | |
+
+Every run (including `--dry-run`) executes inside a dedicated git worktree under `../.afp-worktrees/`, isolated from your working checkout. The worktree is removed automatically once the pipeline reaches a PR (or a dry-run rehearsal completes); it's preserved for inspection whenever the pipeline halts on a blocker, a failed gate, or exhausted retries.
 
 ## Configuration
 

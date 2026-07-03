@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the full agent pipeline — AI Feature Pipeline module
-# Usage: bash scripts/run-pipeline.sh <slug> [issue-body.md] [--dry-run] [--project-root=<path>]
+# Usage: bash scripts/run-pipeline.sh <slug> [issue-body.md] [--dry-run] [--approve-design] [--project-root=<path>]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,18 +11,22 @@ for arg in "$@"; do
     --project-root=*) ROOT="${arg#*=}" ;;
   esac
 done
-SLUG="${1:?Usage: $0 <slug> [issue-body.md] [--dry-run] [--project-root=<path>]}"
+SLUG="${1:?Usage: $0 <slug> [issue-body.md] [--dry-run] [--approve-design] [--project-root=<path>]}"
 ISSUE_BODY=""
 DRY_RUN=""
+APPROVE_DESIGN="false"
 for arg in "${@:2}"; do
   if [ "$arg" = "--dry-run" ]; then
     DRY_RUN="--dry-run"
-  elif [ -z "$ISSUE_BODY" ]; then
+  elif [ "$arg" = "--approve-design" ]; then
+    APPROVE_DESIGN="true"
+  elif [ -z "$ISSUE_BODY" ] && [[ "$arg" != --* ]]; then
     ISSUE_BODY="$arg"
   fi
 done
 ARTIFACTS_DIR=".ai/artifacts/features/$SLUG"
 MAX_LOOPS=3
+MAX_REVIEW_RETRIES=1
 
 # Load config
 read_config() {
@@ -35,8 +39,38 @@ RUN_SCRIPT=$(read_config ".commands.runScript" "npx tsx")
 TYPECHECK_CMD=$(read_config ".commands.typecheck" "tsc --noEmit")
 BRANCH_PREFIX=$(read_config ".project.branchPrefix" "feat")
 DEFAULT_BRANCH=$(read_config ".project.defaultBranch" "main")
+BRANCH="${BRANCH_PREFIX}/$SLUG"
 
-cd "$ROOT"
+# --- Workspace isolation ---
+#
+# Every run — including --dry-run — executes inside a dedicated git worktree,
+# never in the directory you're actively working in. This makes a bad or
+# half-finished pipeline run fully reversible (delete the worktree, the
+# branch, or both) without ever touching your main checkout, and it means
+# --dry-run is a faithful rehearsal of the real branch/worktree/gate
+# mechanics, not just the LLM call. Only the OpenRouter call is mocked and
+# only the push/PR step is skipped in dry-run.
+WORKTREE_ROOT="$(dirname "$ROOT")/.afp-worktrees"
+WORKTREE_DIR="$WORKTREE_ROOT/$(basename "$ROOT")-$SLUG"
+
+setup_worktree() {
+  mkdir -p "$WORKTREE_ROOT"
+  if [ -d "$WORKTREE_DIR" ]; then
+    echo "==> Reusing existing worktree: $WORKTREE_DIR"
+    return
+  fi
+  echo "==> Creating isolated worktree for $BRANCH at $WORKTREE_DIR"
+  if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    git -C "$ROOT" worktree add "$WORKTREE_DIR" "$BRANCH"
+  else
+    git -C "$ROOT" worktree add -b "$BRANCH" "$WORKTREE_DIR" "$DEFAULT_BRANCH"
+  fi
+}
+
+setup_worktree
+PIPELINE_ROOT="$WORKTREE_DIR"
+
+cd "$PIPELINE_ROOT"
 
 run_agent() {
   local role=$1
@@ -46,7 +80,7 @@ run_agent() {
   echo "========================================="
   echo "  Running $role..."
   echo "========================================="
-  ${RUN_SCRIPT} "$SCRIPT_DIR/agent-runner.ts" --role="$role" --slug="$SLUG" --project-root="$ROOT" $extra
+  ${RUN_SCRIPT} "$SCRIPT_DIR/agent-runner.ts" --role="$role" --slug="$SLUG" --project-root="$PIPELINE_ROOT" $extra
 }
 
 # Commit staged agent output, honoring the project's pre-commit hooks.
@@ -62,6 +96,7 @@ commit_stage() {
     echo ""
     echo "  Commit rejected by pre-commit hook: $message"
     echo "  Fix the hook failure (or the agent output that triggered it) before re-running."
+    echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
     exit 1
   fi
 }
@@ -95,12 +130,6 @@ if [ -n "$ISSUE_BODY" ]; then
   fi
 fi
 
-# Create feature branch (skip in dry-run)
-BRANCH="${BRANCH_PREFIX}/$SLUG"
-if [ "$DRY_RUN" != "--dry-run" ]; then
-  git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH" 2>/dev/null || true
-fi
-
 # 1. PM writes feature brief
 run_agent pm
 commit_stage "agent(pm): $SLUG"
@@ -117,6 +146,7 @@ while [ $loop -lt $MAX_LOOPS ]; do
     echo ""
     echo "  BLOCKER found - human intervention required."
     echo "  See $ARTIFACTS_DIR/blocker.md"
+    echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
     exit 1
   fi
 
@@ -137,18 +167,50 @@ done
 # Guard: exhausted loops
 if [ -f "$ARTIFACTS_DIR/blocker.md" ]; then
   echo "  Unresolved blocker."
+  echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
   exit 1
 fi
 if [ "$(read_verdict)" = "questions" ]; then
   echo "  Unresolved threads after max clarification loops."
+  echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
   exit 1
 fi
 
 # 3. Rebuild context.json from source, then Architect produces technical plan
 echo "==> Rebuilding context.json..."
-node "$SCRIPT_DIR/rebuild-context.mjs" --project-root="$ROOT"
+node "$SCRIPT_DIR/rebuild-context.mjs" --project-root="$PIPELINE_ROOT"
 run_agent architect
 commit_stage "agent(architect): $SLUG"
+
+# --- Design gate ---
+#
+# No code gets written until a human has read and approved the technical
+# plan. This is the "design before implementation" checkpoint: the pipeline
+# pauses here (exit 0, not a failure) unless the plan was already approved
+# in a prior run, or --approve-design was passed explicitly (e.g. a CI job
+# re-triggered after a human approved the design-only PR/commit).
+APPROVAL_FLAG="$ARTIFACTS_DIR/.architect-approved"
+if [ ! -f "$APPROVAL_FLAG" ]; then
+  if [ "$APPROVE_DESIGN" = "true" ]; then
+    echo "==> Design approved via --approve-design."
+    touch "$APPROVAL_FLAG"
+    commit_stage "agent(architect): design approved for $SLUG"
+  else
+    echo ""
+    echo "========================================="
+    echo "  Design gate — awaiting approval"
+    echo "========================================="
+    echo "  Review the technical plan before any code is written:"
+    echo "    $PIPELINE_ROOT/$ARTIFACTS_DIR/technical-plan.md"
+    echo "    $PIPELINE_ROOT/$ARTIFACTS_DIR/repository-context.md"
+    echo ""
+    echo "  To continue once approved, re-run:"
+    echo "    bash $0 $SLUG --approve-design --project-root=$ROOT"
+    echo ""
+    echo "  The feature branch and worktree are preserved at: $PIPELINE_ROOT"
+    exit 0
+  fi
+fi
 
 # 4. Dev implements with typecheck gate
 run_agent dev
@@ -164,6 +226,7 @@ while true; do
 
   if [ "$TC_ATTEMPT" -ge 2 ]; then
     echo "  Typecheck still FAILS after retry. Aborting."
+    echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
     ${TYPECHECK_CMD} 2>&1 | head -40
     exit 1
   fi
@@ -203,17 +266,42 @@ else
   echo "  (manifest or tech plan not found — skipping verification)"
 fi
 
-# 5. Review
-run_agent review
-commit_stage "agent(review): $SLUG"
+# 5. Review — with one retry: on FAIL, Dev gets the review findings and one
+# more pass before the pipeline gives up. Unlike the typecheck retry, we do
+# NOT discard the Dev's uncommitted work here: Review runs against committed
+# code, so a retry means Dev incrementally fixes what's already there.
+REVIEW_ATTEMPT=1
+while true; do
+  run_agent review
+  commit_stage "agent(review): $SLUG"
 
-REVIEW_VERDICT=$(read_verdict review)
-if [ "$REVIEW_VERDICT" = "FAIL" ]; then
+  REVIEW_VERDICT=$(read_verdict review)
+  if [ "$REVIEW_VERDICT" != "FAIL" ]; then
+    break
+  fi
+
+  if [ "$REVIEW_ATTEMPT" -gt "$MAX_REVIEW_RETRIES" ]; then
+    echo ""
+    echo "  Review verdict: FAIL after retry — pipeline halted before QA and PR."
+    echo "  See $ARTIFACTS_DIR/review-report.md."
+    echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
+    exit 1
+  fi
+
   echo ""
-  echo "  Review verdict: FAIL — pipeline halted before QA and PR."
-  echo "  Fix the issues in $ARTIFACTS_DIR/review-report.md, then re-run the dev stage."
-  exit 1
-fi
+  echo "  Review FAILED (attempt $REVIEW_ATTEMPT). Feeding findings back to Dev..."
+  cp "$ARTIFACTS_DIR/review-report.md" "$ARTIFACTS_DIR/.agent-review-feedback.md" 2>/dev/null || true
+  run_agent dev
+
+  if ! ${TYPECHECK_CMD} 2>/dev/null; then
+    echo "  Typecheck FAILED after review-retry Dev pass. Aborting."
+    echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
+    ${TYPECHECK_CMD} 2>&1 | head -40
+    exit 1
+  fi
+  commit_stage "agent(dev): $SLUG (review fix)"
+  REVIEW_ATTEMPT=$((REVIEW_ATTEMPT + 1))
+done
 
 # 6. QA
 run_agent qa
@@ -233,6 +321,7 @@ if [ "$QA_VERDICT" = "FAIL" ]; then
   echo ""
   echo "  Branch pushed: $BRANCH"
   echo "  QA failed — no PR created. Fix QA issues before opening a PR manually."
+  echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
   exit 1
 fi
 
@@ -268,6 +357,9 @@ RETRO_FILE="$ARTIFACTS_DIR/retrospective.md"
 DIFF_STAT=$(git diff ${DEFAULT_BRANCH}...HEAD --stat 2>/dev/null || echo "")
 DIFF_SUMMARY=$(git diff ${DEFAULT_BRANCH}...HEAD --shortstat 2>/dev/null || echo "")
 
+PR_BODY_FILE=$(mktemp)
+trap 'rm -f "$PR_BODY_FILE"' EXIT
+
 {
   echo '## Summary'
   echo ''
@@ -289,12 +381,12 @@ DIFF_SUMMARY=$(git diff ${DEFAULT_BRANCH}...HEAD --shortstat 2>/dev/null || echo
   echo '---'
   echo ''
   echo '**Human:** review and merge.'
-} > /tmp/pr-body.md
+} > "$PR_BODY_FILE"
 EXISTING_PR=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null || echo "")
 if [ -n "$EXISTING_PR" ]; then
   gh pr edit "$EXISTING_PR" \
     --title "feat: $SLUG" \
-    --body-file /tmp/pr-body.md \
+    --body-file "$PR_BODY_FILE" \
     2>&1 || true
   echo "Updated existing PR #$EXISTING_PR"
 else
@@ -302,9 +394,15 @@ else
     --base ${DEFAULT_BRANCH} \
     --head "$BRANCH" \
     --title "feat: $SLUG" \
-    --body-file /tmp/pr-body.md \
+    --body-file "$PR_BODY_FILE" \
     2>&1 || echo "Failed to create PR"
 fi
+
+# 10. Pipeline reached the end — the isolated worktree has served its
+# purpose. Remove it; the branch itself lives on in git (local + pushed,
+# unless this was a --dry-run rehearsal, in which case it's local-only).
+cd "$ROOT"
+git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || true
 
 echo ""
 echo "========================================="
