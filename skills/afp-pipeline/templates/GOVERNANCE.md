@@ -18,7 +18,7 @@ This file is read by every agent in the AI Feature Pipeline. It defines the rule
 
 ## Quality gates
 
-- The Dev agent must not produce code that fails typecheck.
+- The Dev agent must not produce code that fails typecheck, lint, or the project's own test suite (if `commands.test` is configured). All three are checked automatically before a Dev commit is accepted, with one retry.
 - The Review agent must flag any missing acceptance criteria as FAIL, not PASS_WITH_NOTES.
 - The QA agent must not fabricate test results.
 

@@ -37,6 +37,8 @@ read_config() {
 }
 RUN_SCRIPT=$(read_config ".commands.runScript" "npx tsx")
 TYPECHECK_CMD=$(read_config ".commands.typecheck" "tsc --noEmit")
+LINT_CMD=$(read_config ".commands.lint" "eslint .")
+TEST_CMD=$(read_config ".commands.test" "")
 BRANCH_PREFIX=$(read_config ".project.branchPrefix" "feat")
 MEMORY_COMPACT_EVERY=$(read_config ".project.memoryCompactEvery" "10")
 DEFAULT_BRANCH=$(read_config ".project.defaultBranch" "main")
@@ -100,6 +102,61 @@ commit_stage() {
     echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
     exit 1
   fi
+}
+
+# Quality gates run after every Dev pass: typecheck (always), lint (always —
+# `commands.lint` was configured but never actually invoked anywhere before
+# this), and the project's own test suite (only if `commands.test` is
+# configured — not every project has one runnable command, so this is
+# opt-in rather than defaulting to a guess). All failures are combined into
+# a single feedback file for the Dev retry rather than three separate ones.
+run_quality_gates() {
+  local feedback_file="$ARTIFACTS_DIR/.agent-typecheck-feedback.md"
+  local tc_out lint_out test_out
+  tc_out=$(mktemp)
+  lint_out=$(mktemp)
+  test_out=$(mktemp)
+  local tc_ok=true lint_ok=true test_ok=true
+
+  if ! ${TYPECHECK_CMD} > "$tc_out" 2>&1; then
+    tc_ok=false
+  fi
+  if ! ${LINT_CMD} > "$lint_out" 2>&1; then
+    lint_ok=false
+  fi
+  if [ -n "$TEST_CMD" ]; then
+    if ! ${TEST_CMD} > "$test_out" 2>&1; then
+      test_ok=false
+    fi
+  fi
+
+  if [ "$tc_ok" = false ] || [ "$lint_ok" = false ] || [ "$test_ok" = false ]; then
+    mkdir -p "$(dirname "$feedback_file")"
+    {
+      if [ "$tc_ok" = false ]; then
+        echo "## Typecheck errors"
+        cat "$tc_out"
+        echo ""
+      fi
+      if [ "$lint_ok" = false ]; then
+        echo "## Lint errors"
+        cat "$lint_out"
+        echo ""
+      fi
+      if [ "$test_ok" = false ]; then
+        echo "## Test failures"
+        cat "$test_out"
+        echo ""
+      fi
+    } > "$feedback_file"
+    head -60 "$feedback_file"
+    rm -f "$tc_out" "$lint_out" "$test_out"
+    return 1
+  fi
+
+  rm -f "$tc_out" "$lint_out" "$test_out"
+  rm -f "$feedback_file" 2>/dev/null || true
+  return 0
 }
 
 read_verdict() {
@@ -274,30 +331,25 @@ if [ ! -f "$APPROVAL_FLAG" ]; then
   fi
 fi
 
-# 4. Dev implements with typecheck gate
+# 4. Dev implements with quality gates (typecheck, lint, project tests)
 run_agent dev
 
-# Typecheck gate: check before committing (one retry allowed)
+# Quality gate: check before committing (one retry allowed)
 TC_ATTEMPT=1
 while true; do
-  if ${TYPECHECK_CMD} 2>/dev/null; then
-    echo "  Typecheck passed (attempt $TC_ATTEMPT). Committing..."
+  if run_quality_gates; then
+    echo "  Typecheck/lint/tests passed (attempt $TC_ATTEMPT). Committing..."
     commit_stage "agent(dev): $SLUG"
     break
   fi
 
   if [ "$TC_ATTEMPT" -ge 2 ]; then
-    echo "  Typecheck still FAILS after retry. Aborting."
+    echo "  Quality gates still FAIL after retry. Aborting."
     echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
-    ${TYPECHECK_CMD} 2>&1 | head -40
     exit 1
   fi
 
-  echo "  Typecheck FAILED (attempt $TC_ATTEMPT). Feeding errors back to Dev..."
-  TC_FILE="$ARTIFACTS_DIR/.agent-typecheck-feedback.md"
-  mkdir -p "$(dirname "$TC_FILE")"
-  ${TYPECHECK_CMD} 2>&1 > "$TC_FILE" || true
-  head -20 "$TC_FILE"
+  echo "  Quality gates FAILED (attempt $TC_ATTEMPT). Feeding errors back to Dev..."
 
   # Revert all uncommitted changes so Dev retry starts fresh
   git checkout HEAD -- . 2>/dev/null || true
@@ -355,10 +407,9 @@ while true; do
   cp "$ARTIFACTS_DIR/review-report.md" "$ARTIFACTS_DIR/.agent-review-feedback.md" 2>/dev/null || true
   run_agent dev
 
-  if ! ${TYPECHECK_CMD} 2>/dev/null; then
-    echo "  Typecheck FAILED after review-retry Dev pass. Aborting."
+  if ! run_quality_gates; then
+    echo "  Quality gates FAILED after review-retry Dev pass. Aborting."
     echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
-    ${TYPECHECK_CMD} 2>&1 | head -40
     exit 1
   fi
   commit_stage "agent(dev): $SLUG (review fix)"

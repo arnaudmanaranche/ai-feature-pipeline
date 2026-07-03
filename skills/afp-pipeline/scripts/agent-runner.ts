@@ -53,6 +53,7 @@ interface ProjectConfig {
     runScript: string;
     typecheck: string;
     lint: string;
+    test?: string;
     formatCheck: string;
     formatWrite: string;
   };
@@ -588,13 +589,15 @@ function buildUserPrompt(
         }
       }
     }
-    // Typecheck feedback (for Dev retry on typecheck failure)
+    // Quality gate feedback (for Dev retry on typecheck/lint/test failure —
+    // the file may contain any combination of the three, see run_quality_gates
+    // in run-pipeline.sh)
     const typecheckFeedback = read(
       `${ctx.featureDir}/.agent-typecheck-feedback.md`
     );
     if (typecheckFeedback && !typecheckFeedback.startsWith('[file not found')) {
       sections.push(
-        `\n## Typecheck errors (previous attempt)\n\nFix ALL of these TypeScript errors:\n\`\`\`\n${typecheckFeedback}\n\`\`\``
+        `\n## Quality gate failures (previous attempt)\n\nFix ALL of the following:\n\`\`\`\n${typecheckFeedback}\n\`\`\``
       );
     }
 

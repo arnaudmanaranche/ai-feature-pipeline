@@ -106,6 +106,21 @@ function detectLintCmd(pkg) {
   return 'eslint .';
 }
 
+function detectTestCmd(pkg) {
+  const scripts = pkg?.scripts || {};
+  // `npm init`'s default placeholder always exits 1 — using it as a quality
+  // gate would fail every single feature, so it's deliberately excluded
+  // rather than trusted just because a "test" script key exists.
+  const testScript = scripts['test'];
+  if (testScript && !/no test specified/i.test(testScript)) {
+    return 'npm test';
+  }
+  for (const key of ['test:unit', 'test:ci']) {
+    if (scripts[key]) return `npm run ${key}`;
+  }
+  return '';
+}
+
 function detectFormatCmd(pkg) {
   const scripts = pkg?.scripts || {};
   for (const key of ['format:check', 'fmt:check', 'format']) {
@@ -360,6 +375,7 @@ const detected = {
   run_script:         detectRunScript(pkg),
   typecheck_cmd:      detectTypecheckCmd(pkg),
   lint_cmd:           detectLintCmd(pkg),
+  test_cmd:           detectTestCmd(pkg),
   format_cmd:         detectFormatCmd(pkg),
   format_write_cmd:   detectFormatWriteCmd(pkg),
   default_branch:     detectDefaultBranch(),
