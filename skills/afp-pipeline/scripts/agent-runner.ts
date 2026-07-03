@@ -157,16 +157,85 @@ interface RoleConfig {
   extraSkills?: string[];
 }
 
+// Every one of these MUST have an entry in .ai/agents.json — agent-runner.ts
+// hardcodes behavior (permissions, output schema, task instructions) by
+// these exact role names elsewhere in this file. A missing or malformed
+// role previously only surfaced as "Unknown role: X" whenever the pipeline
+// happened to reach that stage — often several stages and OpenRouter calls
+// into a run. Validating the whole registry up front fails on the very
+// first invocation instead.
+const REQUIRED_ROLES = [
+  'pm',
+  'dev-review',
+  'pm-respond',
+  'architect',
+  'dev',
+  'review',
+  'qa',
+  'retro',
+  'memory-compact',
+];
+
+function validateRegistry(
+  data: unknown,
+  registryPath: string
+): Record<string, RoleConfig> {
+  const roles = (data as { roles?: unknown } | null)?.roles;
+  if (!roles || typeof roles !== 'object' || Array.isArray(roles)) {
+    console.error(`Invalid ${registryPath}: missing a "roles" object.`);
+    process.exit(1);
+  }
+
+  const rolesObj = roles as Record<string, unknown>;
+  const missingRoles = REQUIRED_ROLES.filter(r => !rolesObj[r]);
+  if (missingRoles.length > 0) {
+    console.error(
+      `Invalid ${registryPath}: missing required role(s): ${missingRoles.join(', ')}.`
+    );
+    console.error(
+      `See "Required roles" in skills/afp-setup/SKILL.md for what each role entry needs.`
+    );
+    process.exit(1);
+  }
+
+  const fieldErrors: string[] = [];
+  for (const [name, cfgRaw] of Object.entries(rolesObj)) {
+    const cfg = cfgRaw as Record<string, unknown>;
+    for (const field of ['skill', 'model', 'artifact', 'description'] as const) {
+      if (typeof cfg?.[field] !== 'string' || cfg[field] === '') {
+        fieldErrors.push(`roles.${name}.${field} must be a non-empty string`);
+      }
+    }
+    if (typeof cfg?.maxTokens !== 'number' || cfg.maxTokens <= 0) {
+      fieldErrors.push(`roles.${name}.maxTokens must be a positive number`);
+    }
+  }
+  if (fieldErrors.length > 0) {
+    console.error(`Invalid ${registryPath}:`);
+    for (const e of fieldErrors) console.error(`  - ${e}`);
+    process.exit(1);
+  }
+
+  return rolesObj as unknown as Record<string, RoleConfig>;
+}
+
 function loadRegistry(): Record<string, RoleConfig> {
   const registryPath = join(getRoot(), '.ai/agents.json');
+  let raw: string;
   try {
-    const raw = readFileSync(registryPath, 'utf-8');
-    const data = JSON.parse(raw);
-    return data.roles;
+    raw = readFileSync(registryPath, 'utf-8');
   } catch (err) {
     console.error(`Failed to load registry from ${registryPath}: ${err}`);
     process.exit(1);
   }
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    console.error(`Invalid JSON in ${registryPath}: ${err}`);
+    process.exit(1);
+  }
+  return validateRegistry(data, registryPath);
 }
 
 // Lazy — loadRegistry() exits the process if .ai/agents.json is missing,
@@ -1651,5 +1720,7 @@ export {
   isOverBudget,
   loadTokenUsage,
   saveTokenUsage,
+  validateRegistry,
+  REQUIRED_ROLES,
 };
 export type { FileChange, ArtifactChange, AgentResult, TokenUsage };

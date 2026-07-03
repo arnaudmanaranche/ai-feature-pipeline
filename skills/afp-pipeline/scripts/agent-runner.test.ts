@@ -24,6 +24,8 @@ import {
   isOverBudget,
   loadTokenUsage,
   saveTokenUsage,
+  validateRegistry,
+  REQUIRED_ROLES,
 } from './agent-runner.ts';
 
 describe('buildToolSchema', () => {
@@ -396,5 +398,81 @@ describe('loadTokenUsage / saveTokenUsage — disk round-trip', () => {
       process.chdir(cwd);
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('validateRegistry — .ai/agents.json schema validation', () => {
+  function validRoles() {
+    const role = () => ({ skill: 's.md', model: 'm', artifact: 'a.md', description: 'd', maxTokens: 1000 });
+    const roles: Record<string, unknown> = {};
+    for (const name of REQUIRED_ROLES) roles[name] = role();
+    return roles;
+  }
+
+  function runWithStubbedExit(fn: () => void): { exitCode: number | undefined; errors: string[] } {
+    const originalExit = process.exit;
+    const originalError = console.error;
+    const errors: string[] = [];
+    let exitCode: number | undefined;
+    // @ts-expect-error — stub for the duration of this test
+    process.exit = (code?: number) => {
+      exitCode = code;
+      throw new Error('__exit__');
+    };
+    console.error = (...args: unknown[]) => {
+      errors.push(args.join(' '));
+    };
+    try {
+      fn();
+    } catch (e) {
+      if (!(e instanceof Error) || e.message !== '__exit__') throw e;
+    } finally {
+      process.exit = originalExit;
+      console.error = originalError;
+    }
+    return { exitCode, errors };
+  }
+
+  test('a complete, well-formed registry passes through unchanged', () => {
+    const roles = validRoles();
+    const result = validateRegistry({ roles }, '.ai/agents.json');
+    assert.deepEqual(Object.keys(result).sort(), REQUIRED_ROLES.slice().sort());
+  });
+
+  test('a missing required role is rejected with its name in the error', () => {
+    const roles = validRoles();
+    delete roles['memory-compact'];
+    const { exitCode, errors } = runWithStubbedExit(() =>
+      validateRegistry({ roles }, '.ai/agents.json')
+    );
+    assert.equal(exitCode, 1);
+    assert.ok(errors.some(e => e.includes('memory-compact')), errors.join('\n'));
+  });
+
+  test('a role missing a required field is rejected', () => {
+    const roles = validRoles();
+    (roles.dev as any).model = '';
+    const { exitCode, errors } = runWithStubbedExit(() =>
+      validateRegistry({ roles }, '.ai/agents.json')
+    );
+    assert.equal(exitCode, 1);
+    assert.ok(errors.some(e => e.includes('roles.dev.model')), errors.join('\n'));
+  });
+
+  test('a non-positive maxTokens is rejected', () => {
+    const roles = validRoles();
+    (roles.pm as any).maxTokens = 0;
+    const { exitCode, errors } = runWithStubbedExit(() =>
+      validateRegistry({ roles }, '.ai/agents.json')
+    );
+    assert.equal(exitCode, 1);
+    assert.ok(errors.some(e => e.includes('roles.pm.maxTokens')), errors.join('\n'));
+  });
+
+  test('a missing "roles" object entirely is rejected', () => {
+    const { exitCode } = runWithStubbedExit(() =>
+      validateRegistry({}, '.ai/agents.json')
+    );
+    assert.equal(exitCode, 1);
   });
 });
