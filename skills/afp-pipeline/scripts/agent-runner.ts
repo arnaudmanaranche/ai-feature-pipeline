@@ -12,7 +12,7 @@ import {
   readdirSync,
   mkdirSync,
 } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve, sep } from 'path';
 import { pathToFileURL } from 'url';
 
 // Project root: default to cwd, override with --project-root.
@@ -23,6 +23,17 @@ function getRoot(): string {
     if (m) return m[1];
   }
   return process.cwd();
+}
+
+// Every file/artifact path in a model's structured output is untrusted
+// input. `join(root, path)` alone does NOT stop `path` from containing
+// `../` segments that resolve outside root — this is the actual containment
+// check, used by read()/write() and by checkPermissions() before anything
+// touches disk.
+function isWithinRoot(candidatePath: string): boolean {
+  const root = resolve(getRoot());
+  const target = resolve(getRoot(), candidatePath);
+  return target === root || target.startsWith(root + sep);
 }
 
 // --- Project config ---
@@ -198,6 +209,9 @@ function parseArgs() {
 }
 
 function read(path: string): string {
+  if (!isWithinRoot(path)) {
+    return `[file not found: ${path}]`;
+  }
   const fullPath = join(getRoot(), path);
   try {
     return readFileSync(fullPath, 'utf-8');
@@ -207,6 +221,10 @@ function read(path: string): string {
 }
 
 function write(path: string, content: string) {
+  if (!isWithinRoot(path)) {
+    console.error(`❌ Refusing to write outside project root: ${path}`);
+    process.exit(1);
+  }
   const fullPath = join(getRoot(), path);
   mkdirSync(dirname(fullPath), { recursive: true });
   writeFileSync(fullPath, content, 'utf-8');
@@ -1085,24 +1103,35 @@ function checkPermissions(
   artifacts: ArtifactChange[]
 ): { allowed: boolean; blocked: string[] } {
   const perms = PERMISSIONS[role];
-  if (!perms) return { allowed: true, blocked: [] };
-
   const blocked: string[] = [];
 
+  // Path containment applies to EVERY role, including ones with no
+  // PERMISSIONS entry — a role's allowedFiles/allowedArtifacts regexes only
+  // check the pattern of the path string (e.g. it ends in `.ts`), not that
+  // it stays inside the project. `../../../tmp/pwned.ts` matches `/\.ts$/`
+  // just fine, so this has to be checked independently, first.
   for (const file of files) {
-    const ok = perms.allowedFiles.some(r => r.test(file.path));
-    if (!ok)
+    if (!isWithinRoot(file.path)) {
+      blocked.push(`file: ${file.path} (escapes project root — refused)`);
+      continue;
+    }
+    if (perms && !perms.allowedFiles.some(r => r.test(file.path))) {
       blocked.push(
         `file: ${file.path} (role ${role} cannot write source files)`
       );
+    }
   }
 
   for (const art of artifacts) {
-    const ok = perms.allowedArtifacts.some(r => r.test(art.path));
-    if (!ok)
+    if (!isWithinRoot(art.path)) {
+      blocked.push(`artifact: ${art.path} (escapes project root — refused)`);
+      continue;
+    }
+    if (perms && !perms.allowedArtifacts.some(r => r.test(art.path))) {
       blocked.push(
         `artifact: ${art.path} (role ${role} cannot write this artifact)`
       );
+    }
   }
 
   return { allowed: blocked.length === 0, blocked };
@@ -1509,5 +1538,6 @@ export {
   parseToolArgs,
   mockResponse,
   applyChanges,
+  isWithinRoot,
 };
 export type { FileChange, ArtifactChange, AgentResult };

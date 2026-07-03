@@ -20,6 +20,7 @@ import {
   parseToolArgs,
   mockResponse,
   applyChanges,
+  isWithinRoot,
 } from './agent-runner.ts';
 
 describe('buildToolSchema', () => {
@@ -155,6 +156,59 @@ describe('checkPermissions', () => {
     );
     assert.equal(allowed, true);
   });
+
+  test('path traversal is blocked even when the extension matches an allowed pattern', () => {
+    // `../../../../tmp/pwned.ts` ends in `.ts`, which the dev role's
+    // allowedFiles regex happily matches on the string alone — this is
+    // exactly why containment has to be checked independently of the
+    // extension/pattern regexes, not folded into them.
+    const { allowed, blocked } = checkPermissions(
+      'dev',
+      [{ path: '../../../../tmp/pwned.ts', action: 'create', content: 'evil' }],
+      []
+    );
+    assert.equal(allowed, false);
+    assert.match(blocked[0], /escapes project root/);
+  });
+
+  test('path traversal in an artifact path is blocked the same way', () => {
+    // The artifact regex only checks that ".ai/artifacts/...md" appears
+    // somewhere in the string — .test() is unanchored, so a leading `../`
+    // sequence in front of a legitimate-looking suffix still matches it.
+    const { allowed, blocked } = checkPermissions(
+      'pm',
+      [],
+      [{ path: '../../.ai/artifacts/features/x/evil.md', action: 'create', content: '' }]
+    );
+    assert.equal(allowed, false);
+    assert.match(blocked[0], /escapes project root/);
+  });
+
+  test('a role with no PERMISSIONS entry still gets path containment enforced', () => {
+    const { allowed, blocked } = checkPermissions(
+      'some-future-role-not-yet-in-PERMISSIONS',
+      [{ path: '../../../../tmp/pwned.ts', action: 'create', content: '' }],
+      []
+    );
+    assert.equal(allowed, false);
+    assert.match(blocked[0], /escapes project root/);
+  });
+});
+
+describe('isWithinRoot', () => {
+  test('a normal relative path resolves inside root', () => {
+    assert.equal(isWithinRoot('src/feature.ts'), true);
+    assert.equal(isWithinRoot('.ai/artifacts/features/x/dev-log.md'), true);
+  });
+
+  test('a traversal path that escapes the process root is rejected', () => {
+    assert.equal(isWithinRoot('../../../../tmp/pwned.ts'), false);
+    assert.equal(isWithinRoot('../../etc/passwd'), false);
+  });
+
+  test('an absolute path outside root is rejected', () => {
+    assert.equal(isWithinRoot('/etc/passwd'), false);
+  });
 });
 
 describe('getMatchingTypeSkills', () => {
@@ -262,6 +316,42 @@ describe('applyChanges — golden write behavior', () => {
       } finally {
         process.exit = originalExit;
         process.chdir(cwd);
+      }
+    });
+  });
+
+  test('a path-traversal attempt is refused end-to-end — nothing is written outside root', () => {
+    withTempRoot(root => {
+      const cwd = process.cwd();
+      process.chdir(root);
+      const originalExit = process.exit;
+      let exitCode: number | undefined;
+      // @ts-expect-error — stub process.exit for the duration of this test
+      process.exit = (code?: number) => {
+        exitCode = code;
+        throw new Error('__exit__');
+      };
+      // Sibling of `root` (both live under the same mkdtemp parent), i.e.
+      // exactly where `../escape.ts` would land if containment failed.
+      const escapeTarget = join(root, '..', 'afp-traversal-escape.ts');
+      try {
+        assert.throws(
+          () =>
+            applyChanges(
+              'dev',
+              [{ path: '../afp-traversal-escape.ts', action: 'create', content: 'evil' }],
+              [],
+              'x',
+              false
+            ),
+          /__exit__/
+        );
+        assert.equal(exitCode, 1);
+        assert.throws(() => readFileSync(escapeTarget));
+      } finally {
+        process.exit = originalExit;
+        process.chdir(cwd);
+        rmSync(escapeTarget, { force: true });
       }
     });
   });
