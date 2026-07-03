@@ -446,14 +446,14 @@ function buildUserPrompt(
     `## Registry: Scope checklist\n\n\`\`\`markdown\n${ctx.registryScope}\n\`\`\``
   );
 
-  // Cross-session project memory (PM, Architect, Retro use this)
-  if (role === 'pm' || role === 'architect' || role === 'retro') {
-    const memory = read('.ai/project-memory.md');
-    if (memory && !memory.startsWith('[file not found')) {
-      sections.push(
-        `## Project memory (cross-session)\n\n\`\`\`markdown\n${memory}\n\`\`\``
-      );
-    }
+  // Cross-session project memory — every role gets this, not just PM/Architect/
+  // Retro. A pitfall or convention Retro recorded after a past feature is
+  // just as relevant to Dev Review or QA as it is to PM/Architect.
+  const memory = read('.ai/project-memory.md');
+  if (memory && !memory.startsWith('[file not found')) {
+    sections.push(
+      `## Project memory (cross-session)\n\n\`\`\`markdown\n${memory}\n\`\`\``
+    );
   }
 
   // For PM, Dev, or Architect: add directory tree for context
@@ -763,11 +763,34 @@ Write \`${ctx.featureDir}/retrospective.md\` with:
 6. **Recommendations** — actionable advice for future pipeline runs
 7. **Blocker log** — any blockers and how they were resolved
 
-After writing the feature retrospective, also append key learnings to \`.ai/project-memory.md\` (create if missing) under a \`## ${slug}\` section. This cross-session memory file helps future PM and Architect agents make better decisions. Include:
-- Architecture patterns discovered
-- Common pitfalls in this codebase
-- Useful conventions observed
-- Integration notes (which services touch what)`,
+After writing the feature retrospective, also submit an updated \`.ai/project-memory.md\` artifact (create if missing). This file is read by EVERY role on EVERY future feature, so it must stay small and organized by fixed categories, not grow forever as one section per feature:
+
+## Project memory (cross-session)
+
+### Pitfalls
+- ...
+
+### Conventions confirmed
+- ...
+
+### Architecture decisions
+- ...
+
+### Integration notes
+- ...
+
+Merge your new learnings into the matching category (don't create a new \`## ${slug}\` section). Tag each new bullet with \`(${slug})\` so its origin is traceable. Keep bullets short — future agents scan this, they don't read it closely. If a category already has a bullet that's now outdated or superseded, replace it instead of appending a contradiction next to it.`,
+    'memory-compact': `You are the **memory compaction** agent. This runs periodically (not on every feature) to keep \`.ai/project-memory.md\` useful instead of letting it grow unbounded.
+
+Read the current \`.ai/project-memory.md\` (in the Project memory section of the context above).
+
+Rewrite it, keeping the same four categories (Pitfalls, Conventions confirmed, Architecture decisions, Integration notes):
+1. **Deduplicate** — merge bullets that say the same thing, even if worded differently or tagged with different feature slugs.
+2. **Drop stale entries** — remove anything superseded by a later, more specific bullet in the same category.
+3. **Keep it terse** — one line per bullet, no prose paragraphs.
+4. **Preserve traceability** — keep the \`(slug)\` tags on surviving bullets so a human can still trace where a piece of memory came from.
+
+Do NOT touch any feature artifact — this role may only submit \`.ai/project-memory.md\`. Submit the full rewritten file as a single artifact.`,
   };
 
   sections.push(`## Task\n\n${tasks[role]}`);
@@ -1030,6 +1053,13 @@ const PERMISSIONS: Record<
     allowedArtifacts: [/\.ai\/artifacts\/.*\.md$/, /\.ai\/project-memory\.md$/],
     allowedFiles: [/^$/],
   },
+  'memory-compact': {
+    // Single-purpose role: it may ONLY touch project-memory.md, not any
+    // feature artifact — its whole job is to prune and restructure that
+    // one file, nothing else.
+    allowedArtifacts: [/\.ai\/project-memory\.md$/],
+    allowedFiles: [/^$/],
+  },
 };
 
 function checkPermissions(
@@ -1251,6 +1281,31 @@ N/A — Maestro ran successfully.
 ## Notes for human MR
 
 - All flows passed.
+`,
+        },
+      ],
+    };
+  }
+  if (role === 'memory-compact') {
+    return {
+      ...base,
+      artifacts: [
+        {
+          path: '.ai/project-memory.md',
+          action: 'update',
+          content: `## Project memory (cross-session)
+
+### Pitfalls
+- (compacted) duplicate pitfalls merged
+
+### Conventions confirmed
+- (compacted)
+
+### Architecture decisions
+- (compacted)
+
+### Integration notes
+- (compacted)
 `,
         },
       ],

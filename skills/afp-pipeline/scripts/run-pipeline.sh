@@ -38,6 +38,7 @@ read_config() {
 RUN_SCRIPT=$(read_config ".commands.runScript" "npx tsx")
 TYPECHECK_CMD=$(read_config ".commands.typecheck" "tsc --noEmit")
 BRANCH_PREFIX=$(read_config ".project.branchPrefix" "feat")
+MEMORY_COMPACT_EVERY=$(read_config ".project.memoryCompactEvery" "10")
 DEFAULT_BRANCH=$(read_config ".project.defaultBranch" "main")
 BRANCH="${BRANCH_PREFIX}/$SLUG"
 
@@ -111,6 +112,32 @@ read_verdict() {
   fi
   if [ -f "$file" ]; then
     node -e "try{console.log(JSON.parse(require('fs').readFileSync('$file','utf-8')).verdict)}catch(e){}" 2>/dev/null
+  fi
+}
+
+# Session memory before context reset — .ai/project-memory.md lives across
+# features (committed on each feature branch, so it survives via merges),
+# but left to grow forever it stops being memory and starts being noise.
+# Bump the counter here (before the retro commit, so it rides along in the
+# same commit with no extra noise) and compact every MEMORY_COMPACT_EVERY
+# shipped features.
+bump_memory_compact_counter() {
+  local counter_file=".ai/.memory-compact-counter"
+  local count=0
+  [ -f "$counter_file" ] && count=$(cat "$counter_file")
+  count=$((count + 1))
+  mkdir -p .ai
+  echo "$count" > "$counter_file"
+  echo "$count"
+}
+
+run_memory_compact_if_due() {
+  local count="$1"
+  if [ $((count % MEMORY_COMPACT_EVERY)) -eq 0 ]; then
+    echo ""
+    echo "==> $count features shipped — compacting .ai/project-memory.md..."
+    run_agent memory-compact
+    commit_stage "agent(memory-compact): after $count features"
   fi
 }
 
@@ -314,7 +341,9 @@ if [ "$QA_VERDICT" = "FAIL" ]; then
   echo "  See $ARTIFACTS_DIR/qa-report.md for details."
   # Run retro so learnings are captured, but skip PR creation
   run_agent retro
+  FEATURE_COUNT=$(bump_memory_compact_counter)
   commit_stage "agent(retro): $SLUG"
+  run_memory_compact_if_due "$FEATURE_COUNT"
   if [ "$DRY_RUN" != "--dry-run" ]; then
     git push origin "$BRANCH" 2>&1 || echo "Push failed"
   fi
@@ -327,7 +356,9 @@ fi
 
 # 7. Retrospective — compile session learnings
 run_agent retro
+FEATURE_COUNT=$(bump_memory_compact_counter)
 commit_stage "agent(retro): $SLUG"
+run_memory_compact_if_due "$FEATURE_COUNT"
 
 # 8. Push branch (skip dry-run)
 if [ "$DRY_RUN" != "--dry-run" ]; then

@@ -26,10 +26,11 @@ Write `retrospective.md` with these sections:
 
 ## Cross-session memory
 
-After writing the feature retrospective, also append key learnings to `.ai/project-memory.md` (create if missing) under a section named after the feature slug. This cross-session memory file helps future PM and Architect agents make better decisions. Include:
-- Architecture patterns discovered
-- Common pitfalls in this codebase
-- Useful conventions observed
-- Integration notes (which services touch what)
+After writing the feature retrospective, also submit an updated `.ai/project-memory.md` (create if missing). Every role on every future feature reads this file, so it is organized into four fixed categories, not one section per feature:
 
-Keep the memory entries concise — bullet points, not prose. Future agents need to scan them quickly.
+- **Pitfalls** — common mistakes in this codebase
+- **Conventions confirmed** — patterns validated across features
+- **Architecture decisions** — structural choices and why
+- **Integration notes** — which services touch what
+
+Merge new learnings into the matching category instead of appending a new section for this feature. Tag each new bullet with `(<slug>)` for traceability. If an existing bullet is now outdated or superseded, replace it — don't leave a contradiction sitting next to it. Keep entries concise — bullet points, not prose. Future agents need to scan them quickly, and this file will periodically be compacted by a dedicated `memory-compact` role, which relies on the category structure and slug tags to deduplicate safely.

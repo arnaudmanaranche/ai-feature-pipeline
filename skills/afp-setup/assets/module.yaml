@@ -88,3 +88,7 @@ source_extensions:
 skip_dirs:
   prompt: 'Which directories should be excluded from file tree and context indexing? (comma-separated)'
   default: 'node_modules,dist,build'
+
+memory_compact_every:
+  prompt: 'How many shipped features between automatic project-memory.md compaction runs?'
+  default: '10'

@@ -10,7 +10,7 @@ Run this skill when you first install the module in a project. It auto-detects t
 2. Presents detected values to the user for confirmation or correction
 3. Prompts only for values that could not be detected
 4. Generates `.ai/config.json` with all project settings
-5. Generates `.ai/agents.json` with role definitions
+5. Generates `.ai/agents.json` with role definitions (see **Required roles** below — `agent-runner.ts` hardcodes behavior per role name, so every one of these must have an entry or that role's pipeline stage will fail with "Unknown role")
 6. Creates `.ai/artifacts/features/` directory
 7. Copies registry files (scope-checklist, ship-checklist, analytics-events, paywall-touchpoints) into `.ai/registry/`
 8. Copies governance files (GOVERNANCE.md, DENIED_ACTIONS.md) from `skills/afp-pipeline/templates/` into `.ai/`
@@ -68,6 +68,14 @@ Press Enter to confirm each value, or type a new one.
 ```
 
 For fields where nothing was detected (empty string), explain what the field is for and ask the user to fill it in.
+
+## Required roles
+
+`.ai/agents.json` must contain a `roles` object with exactly these keys — `agent-runner.ts` looks up role behavior (permissions, output schema, task instructions) by these exact names:
+
+`pm`, `dev-review`, `pm-respond`, `architect`, `dev`, `review`, `qa`, `retro`, `memory-compact`
+
+Each role entry needs: `skill` (path to its prompt file under `skills/afp-pipeline/prompts/`, e.g. `skills/afp-pipeline/prompts/pm.md` — `memory-compact` uses `skills/afp-pipeline/prompts/memory-compact.md`), `model`, `artifact` (primary output filename), `description`, and `maxTokens`. `dev` additionally supports optional `typeSkills` and `extraSkills`. Use a smaller/cheaper model for `memory-compact` — it does bounded text reorganization, not novel reasoning.
 
 ## Configuration variables
 
