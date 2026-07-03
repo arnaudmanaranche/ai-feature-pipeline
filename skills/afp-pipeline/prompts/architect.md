@@ -10,6 +10,8 @@ This must contain:
 
 **Architecture** — one paragraph describing how the feature fits into the existing app structure
 
+**Diagram** — a Mermaid diagram (in a ` ```mermaid ` fenced block) showing the actual flow. Use a sequence diagram for a new interaction or API flow, or a component/flowchart diagram for new UI or data flow — pick whichever type actually represents the feature. This is mandatory, not optional prose: a technical plan without a diagram is incomplete and the pipeline will send it back for a retry. The Review agent will later check the implementation's control/data flow against this diagram, not just against the prose description.
+
 **Impacted files** — exact file paths, one per line, with a one-line description of what changes in each. Be precise:
 - `path/to/file.ts` — add new function for X
 - `path/to/component.tsx` — add new UI element

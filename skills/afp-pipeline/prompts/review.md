@@ -12,6 +12,7 @@ Read the **feature brief**, the **git diff**, and the **dev log**. Check every i
 6. **Paywall** — free and premium paths both work as specified. No paywall bypass. No broken upgrade flow.
 7. **Edge cases** — every edge case from the scope checklist is handled in the implementation.
 8. **Security & privacy** — no secrets committed, no PII logged, no obvious injection vectors, no missing auth checks.
+9. **Diagram vs diff** — read the **Diagram** section of `technical-plan.md` and compare it against the actual git diff. Does the implemented control/data flow match what the diagram describes (same steps, same order, same participants)? A skipped step, reordered call, or an untracked extra path is a real divergence — flag it explicitly and treat it as a FAIL unless it's a trivial rename with no behavioral difference. A plan that "sounds right" in prose but was implemented differently in practice is exactly the failure mode this check exists to catch.
 
 ## Verdict thresholds
 

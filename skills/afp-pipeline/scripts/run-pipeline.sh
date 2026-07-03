@@ -141,6 +141,25 @@ run_memory_compact_if_due() {
   fi
 }
 
+# Skill creation before repeating the same workflow forever: Retro may have
+# noticed a pattern recurring across 3+ features and proposed a dedicated
+# skill instead of routing it through the full pipeline every time. Never
+# auto-applied — just surfaced here so a human actually sees it.
+notify_skill_proposals() {
+  local proposals_dir=".ai/artifacts/skill-proposals"
+  [ -d "$proposals_dir" ] || return 0
+  local printed_header=""
+  for f in "$proposals_dir"/*.md; do
+    [ -e "$f" ] || continue
+    if [ -z "$printed_header" ]; then
+      echo ""
+      echo "==> Skill proposal(s) awaiting human review:"
+      printed_header="yes"
+    fi
+    echo "    $f"
+  done
+}
+
 # 0. Scaffold if not exists
 if [ ! -d "$ARTIFACTS_DIR" ]; then
   echo "==> Scaffolding feature folder..."
@@ -207,6 +226,22 @@ fi
 echo "==> Rebuilding context.json..."
 node "$SCRIPT_DIR/rebuild-context.mjs" --project-root="$PIPELINE_ROOT"
 run_agent architect
+
+# Diagrams before handwavy systems: a technical plan without a Mermaid
+# diagram is prose, not a plan Review can actually check the diff against.
+# Enforced structurally here, not just via prompt wording — one retry.
+DIAGRAM_ATTEMPT=1
+while ! grep -q '```mermaid' "$ARTIFACTS_DIR/technical-plan.md" 2>/dev/null; do
+  if [ "$DIAGRAM_ATTEMPT" -ge 2 ]; then
+    echo "  Architect did not produce a required Mermaid diagram after retry. Aborting."
+    echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
+    exit 1
+  fi
+  echo "  technical-plan.md is missing a \`\`\`mermaid diagram (attempt $DIAGRAM_ATTEMPT). Retrying Architect..."
+  DIAGRAM_ATTEMPT=$((DIAGRAM_ATTEMPT + 1))
+  run_agent architect
+done
+
 commit_stage "agent(architect): $SLUG"
 
 # --- Design gate ---
@@ -344,6 +379,7 @@ if [ "$QA_VERDICT" = "FAIL" ]; then
   FEATURE_COUNT=$(bump_memory_compact_counter)
   commit_stage "agent(retro): $SLUG"
   run_memory_compact_if_due "$FEATURE_COUNT"
+notify_skill_proposals
   if [ "$DRY_RUN" != "--dry-run" ]; then
     git push origin "$BRANCH" 2>&1 || echo "Push failed"
   fi
@@ -359,6 +395,7 @@ run_agent retro
 FEATURE_COUNT=$(bump_memory_compact_counter)
 commit_stage "agent(retro): $SLUG"
 run_memory_compact_if_due "$FEATURE_COUNT"
+notify_skill_proposals
 
 # 8. Push branch (skip dry-run)
 if [ "$DRY_RUN" != "--dry-run" ]; then

@@ -28,8 +28,8 @@ Each stage produces an artifact in `.ai/artifacts/features/<slug>/`.
 
 ### 3. Architect — Software Architect
 **Prompt:** `prompts/architect.md`
-**Output:** `technical-plan.md` + `repository-context.md` — architecture, impacted files, risks, implementation order
-**Gate:** Design gate. The pipeline pauses (exit 0) immediately after this stage — no code is written until a human has read the plan and re-runs with `--approve-design` (or the flag `.ai/artifacts/features/<slug>/.architect-approved` already exists from a prior approved run).
+**Output:** `technical-plan.md` (including a mandatory Mermaid diagram of the actual flow) + `repository-context.md` — architecture, impacted files, risks, implementation order
+**Gate:** Diagram gate — a plan with no ` ```mermaid ` block triggers one automatic retry, then aborts if still missing. Design gate — the pipeline then pauses (exit 0) — no code is written until a human has read the plan and re-runs with `--approve-design` (or the flag `.ai/artifacts/features/<slug>/.architect-approved` already exists from a prior approved run).
 
 ### 4. Dev — Developer
 **Prompt:** `prompts/dev.md`
@@ -38,7 +38,7 @@ Each stage produces an artifact in `.ai/artifacts/features/<slug>/`.
 
 ### 5. Review — Code Reviewer
 **Prompt:** `prompts/review.md`
-**Output:** `review-report.md` — checks implementation against the brief
+**Output:** `review-report.md` — checks implementation against the brief, including whether the git diff's actual control/data flow matches the Architect's diagram
 **Gate:** FAIL verdict feeds the review findings back to Dev for one retry pass (typecheck re-runs, then Review runs again). Still FAIL after the retry halts the pipeline before QA and PR creation.
 
 ### 6. QA — Quality Assurance
@@ -48,7 +48,12 @@ Each stage produces an artifact in `.ai/artifacts/features/<slug>/`.
 
 ### 7. Retro — Retrospective
 **Prompt:** `prompts/retro.md`
-**Output:** `retrospective.md` + appends to `.ai/project-memory.md` — session learnings for future runs
+**Output:** `retrospective.md` + merges learnings into `.ai/project-memory.md`'s four fixed categories (Pitfalls, Conventions confirmed, Architecture decisions, Integration notes). If a pattern has recurred essentially unchanged across 3+ features, also submits a skill proposal at `.ai/artifacts/skill-proposals/<name>.md` — a suggestion for a human to review, never applied automatically.
+
+### Memory Compact (periodic, not per-feature)
+**Prompt:** `prompts/memory-compact.md`
+**Trigger:** every `project.memoryCompactEvery` shipped features (default 10; both the counter and the memory file live on feature branches, so this only fires once merged PRs have carried the counter forward)
+**Output:** deduplicated, pruned `.ai/project-memory.md`. Restricted at the permission layer to touch only that one file.
 
 ## Automation
 

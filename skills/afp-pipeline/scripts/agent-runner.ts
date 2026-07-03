@@ -589,6 +589,17 @@ function buildUserPrompt(
     }
   }
 
+  // Technical plan + diagram (Review only) — Review checks the diff against
+  // the Architect's intended flow, not just against prose in the brief.
+  if (role === 'review') {
+    const techPlanForReview = read(`${ctx.featureDir}/technical-plan.md`);
+    if (techPlanForReview && !techPlanForReview.startsWith('[file not found')) {
+      sections.push(
+        `## Technical plan (Architect)\n\n\`\`\`markdown\n${techPlanForReview}\n\`\`\``
+      );
+    }
+  }
+
   // Git diff (Review only)
   if (role === 'review') {
     try {
@@ -668,6 +679,8 @@ This must contain:
 
 **Architecture** — one paragraph describing how the feature fits into the existing app structure
 
+**Diagram** — a Mermaid diagram (\`\`\`mermaid fenced block) showing the actual flow: a sequence diagram for a new interaction/API flow, or a component/flowchart diagram for new UI or data flow. This is MANDATORY, not optional prose — the pipeline will reject the plan and retry this stage if no \`\`\`mermaid block is present. Pick whichever diagram type actually represents the feature; do not force a sequence diagram onto something that's purely structural. The Review agent will check the implementation against this diagram, not just against the prose above.
+
 **Impacted files** — exact file paths, one per line, with a one-line description of what changes in each. Be precise:
 - \`app/(tabs)/settings.tsx\` — add new settings row for X
 - \`services/supabase.ts\` — add new query function
@@ -734,7 +747,9 @@ If you cannot answer a question or resolve a blocker, set status to **blocked** 
 6. Update \`${ctx.featureDir}/dev-log.md\` with what you did.
 
 IMPORTANT: If you do not output any files in the ## Files section, no code changes will be made. The script writes files exactly as you provide them.`,
-    review: `Review the implementation against the feature brief. Check all checklist items. Write \`${ctx.featureDir}/review-report.md\` with your verdict.`,
+    review: `Review the implementation against the feature brief. Check all checklist items. Write \`${ctx.featureDir}/review-report.md\` with your verdict.
+
+Additionally, check the git diff against the **Diagram** in the Architect's technical plan (provided above): does the actual control/data flow in the code match what the diagram describes? If the diagram shows step A calling B calling C and the diff shows a different order, a skipped step, or an extra untracked path, flag it explicitly in your report — a plan that "sounds right" in prose but was implemented differently in practice is exactly the failure mode this check exists to catch. Treat a real divergence as a FAIL, not a note, unless it's a trivial rename with no behavioral difference.`,
     qa: `Review the Maestro E2E test plan from the brief and the actual Maestro test results provided in the context. Write \`${ctx.featureDir}/qa-report.md\`.
 
 If Maestro results are provided (from CI pre-flight), use the actual pass/fail data to write your report. Record each flow's result in the "Flows executed" table. Set verdict to PASS if all flows passed, FAIL if any failed, or BLOCKED_ENV only if results are genuinely unavailable.
@@ -779,7 +794,9 @@ After writing the feature retrospective, also submit an updated \`.ai/project-me
 ### Integration notes
 - ...
 
-Merge your new learnings into the matching category (don't create a new \`## ${slug}\` section). Tag each new bullet with \`(${slug})\` so its origin is traceable. Keep bullets short — future agents scan this, they don't read it closely. If a category already has a bullet that's now outdated or superseded, replace it instead of appending a contradiction next to it.`,
+Merge your new learnings into the matching category (don't create a new \`## ${slug}\` section). Tag each new bullet with \`(${slug})\` so its origin is traceable. Keep bullets short — future agents scan this, they don't read it closely. If a category already has a bullet that's now outdated or superseded, replace it instead of appending a contradiction next to it.
+
+Skill creation: check the "Conventions confirmed" category for a pattern that has now recurred, essentially unchanged, across 3+ different (slug) tags (e.g. "add a settings toggle" or "add an analytics event + i18n keys + registry entry" showing up the same way each time). If you find one, submit an additional artifact at \`.ai/artifacts/skill-proposals/<short-pattern-name>.md\` with: **Pattern observed**, **Evidence** (which slugs, what varied vs. stayed fixed), **Proposed skill** (inputs/outputs), and **Worth a deterministic script?** (say so explicitly if the pattern is mechanical enough to skip the LLM entirely). This is a proposal for a human to review, never something you build yourself — same design-before-implementation discipline as the Architect's plan, applied to the pipeline's own tooling. Skip this section entirely if nothing has repeated 3+ times yet; don't force a proposal just to have one.`,
     'memory-compact': `You are the **memory compaction** agent. This runs periodically (not on every feature) to keep \`.ai/project-memory.md\` useful instead of letting it grow unbounded.
 
 Read the current \`.ai/project-memory.md\` (in the Project memory section of the context above).
@@ -1191,6 +1208,61 @@ Users cannot currently do X, which causes frustration.
 **Status:** Open
 
 **Question:** What happens when the user has no network connection?
+`,
+        },
+      ],
+    };
+  }
+  if (role === 'architect') {
+    // Test seam: dry-run only. Lets run-pipeline.sh's diagram gate be
+    // exercised end-to-end without a real model omitting the diagram.
+    const includeDiagram = process.env.AFP_MOCK_ARCHITECT_NO_DIAGRAM !== '1';
+    return {
+      ...base,
+      artifacts: [
+        {
+          path: `${featureDir}/technical-plan.md`,
+          action: 'create',
+          content: `# Technical Plan
+
+## Architecture
+
+One paragraph describing how the feature fits into the existing app structure.
+
+## Diagram
+
+${
+  includeDiagram
+    ? `\`\`\`mermaid
+sequenceDiagram
+    participant U as User
+    participant UI as Settings
+    participant S as Service
+    U->>UI: toggles setting
+    UI->>S: persist(value)
+    S-->>UI: ok
+\`\`\``
+    : '(no diagram — test seam for the missing-diagram retry path)'
+}
+
+## Impacted Files
+
+- \`app/(tabs)/settings.tsx\` — add new settings row for X
+
+## Implementation Order
+
+1. Add i18n keys
+2. Wire into navigation
+`,
+        },
+        {
+          path: `${featureDir}/repository-context.md`,
+          action: 'create',
+          content: `# Repository Context
+
+## Relevant Files
+
+- \`app/(tabs)/settings.tsx\`
 `,
         },
       ],
