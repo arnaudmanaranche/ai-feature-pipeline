@@ -21,6 +21,9 @@ import {
   mockResponse,
   applyChanges,
   isWithinRoot,
+  isOverBudget,
+  loadTokenUsage,
+  saveTokenUsage,
 } from './agent-runner.ts';
 
 describe('buildToolSchema', () => {
@@ -354,5 +357,44 @@ describe('applyChanges — golden write behavior', () => {
         rmSync(escapeTarget, { force: true });
       }
     });
+  });
+});
+
+describe('isOverBudget — token spend circuit breaker', () => {
+  test('no budget configured means never over budget', () => {
+    assert.equal(isOverBudget({ totalTokens: 999_999_999, calls: [] }, undefined), false);
+    assert.equal(isOverBudget({ totalTokens: 999_999_999, calls: [] }, 0), false);
+  });
+
+  test('under budget is not blocked', () => {
+    assert.equal(isOverBudget({ totalTokens: 100, calls: [] }, 1000), false);
+  });
+
+  test('at or over budget is blocked', () => {
+    assert.equal(isOverBudget({ totalTokens: 1000, calls: [] }, 1000), true);
+    assert.equal(isOverBudget({ totalTokens: 1500, calls: [] }, 1000), true);
+  });
+});
+
+describe('loadTokenUsage / saveTokenUsage — disk round-trip', () => {
+  test('missing usage file defaults to zero, and a saved value round-trips', () => {
+    const root = mkdtempSync(join(tmpdir(), 'afp-test-'));
+    const cwd = process.cwd();
+    process.chdir(root);
+    try {
+      const featureDir = '.ai/artifacts/features/x';
+      const initial = loadTokenUsage(featureDir);
+      assert.deepEqual(initial, { totalTokens: 0, calls: [] });
+
+      initial.totalTokens += 500;
+      initial.calls.push({ role: 'pm', tokens: 500 });
+      saveTokenUsage(featureDir, initial);
+
+      const reloaded = loadTokenUsage(featureDir);
+      assert.deepEqual(reloaded, { totalTokens: 500, calls: [{ role: 'pm', tokens: 500 }] });
+    } finally {
+      process.chdir(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

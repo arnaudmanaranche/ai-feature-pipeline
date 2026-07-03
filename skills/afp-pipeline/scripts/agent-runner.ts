@@ -46,6 +46,9 @@ interface ProjectConfig {
     branchPrefix: string;
     defaultBranch: string;
     pathAlias: string;
+    // Opt-in circuit breaker on total OpenRouter token spend per feature.
+    // Undefined or 0 means unlimited (the pre-existing behavior).
+    maxTokensPerFeature?: number;
   };
   bot: { name: string; email: string };
   commands: {
@@ -896,6 +899,7 @@ interface AgentResult {
   artifacts: ArtifactChange[];
   verdict: string;
   raw: string;
+  usageTokens?: number;
 }
 
 const FILE_ITEM_SCHEMA = {
@@ -1061,7 +1065,12 @@ async function callOpenRouter(
         process.exit(1);
       }
       console.log(`  Tool call arguments: ${argsRaw.length} chars`);
-      return parseToolArgs(argsRaw, role);
+      const result = parseToolArgs(argsRaw, role);
+      if (typeof data.usage?.total_tokens === 'number') {
+        result.usageTokens = data.usage.total_tokens;
+        console.log(`  Tokens used this call: ${result.usageTokens}`);
+      }
+      return result;
     }
 
     lastError = await response.text();
@@ -1448,6 +1457,44 @@ N/A — E2E suite ran successfully.
   return { ...base, verdict: 'clear' };
 }
 
+// --- Token budget (circuit breaker) ---
+//
+// A retry loop that goes wrong (typecheck/lint/review retries stacking
+// across several stages) has no ceiling on total OpenRouter spend today.
+// This tracks cumulative real token usage per feature and, if
+// project.maxTokensPerFeature is configured, refuses to make further calls
+// once it's exceeded — a human has to explicitly raise the budget or take
+// over rather than the pipeline silently spending without limit.
+
+interface TokenUsage {
+  totalTokens: number;
+  calls: { role: string; tokens: number }[];
+}
+
+function loadTokenUsage(featureDir: string): TokenUsage {
+  const raw = read(`${featureDir}/.agent-token-usage.json`);
+  if (!raw || raw.startsWith('[file not found')) {
+    return { totalTokens: 0, calls: [] };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      totalTokens: typeof parsed.totalTokens === 'number' ? parsed.totalTokens : 0,
+      calls: Array.isArray(parsed.calls) ? parsed.calls : [],
+    };
+  } catch {
+    return { totalTokens: 0, calls: [] };
+  }
+}
+
+function saveTokenUsage(featureDir: string, usage: TokenUsage): void {
+  write(`${featureDir}/.agent-token-usage.json`, JSON.stringify(usage, null, 2));
+}
+
+function isOverBudget(usage: TokenUsage, budget: number | undefined): boolean {
+  return typeof budget === 'number' && budget > 0 && usage.totalTokens >= budget;
+}
+
 async function main() {
   const args = parseArgs();
   const { role, slug } = args;
@@ -1470,6 +1517,21 @@ async function main() {
   // 1. Load context
   console.log('\n  Loading context...');
   const ctx = loadContext(role, slug);
+
+  // Token budget check — real calls only, dry-run never spends anything.
+  if (!isDryRun) {
+    const usage = loadTokenUsage(ctx.featureDir);
+    const budget = CONFIG.project.maxTokensPerFeature;
+    if (isOverBudget(usage, budget)) {
+      console.error(
+        `❌ Token budget exceeded for feature "${slug}": ${usage.totalTokens}/${budget} tokens already spent.`
+      );
+      console.error(
+        `   Raise project.maxTokensPerFeature in .ai/config.json, or take over this feature manually.`
+      );
+      process.exit(1);
+    }
+  }
 
   // 2. Load skill prompt
   const skillContent = read(config.skill);
@@ -1496,6 +1558,20 @@ async function main() {
     );
   }
   const { files, artifacts, verdict } = result;
+
+  // Record real token spend against this feature's cumulative budget.
+  if (!isDryRun && typeof result.usageTokens === 'number') {
+    const usage = loadTokenUsage(ctx.featureDir);
+    usage.totalTokens += result.usageTokens;
+    usage.calls.push({ role, tokens: result.usageTokens });
+    saveTokenUsage(ctx.featureDir, usage);
+    const budget = CONFIG.project.maxTokensPerFeature;
+    if (budget && budget > 0) {
+      console.log(
+        `  Cumulative tokens for "${slug}": ${usage.totalTokens}/${budget}`
+      );
+    }
+  }
 
   // Save raw tool-call arguments for debugging
   const responseLogPath = `${ctx.featureDir}/.agent-${role}-response.md`;
@@ -1572,5 +1648,8 @@ export {
   mockResponse,
   applyChanges,
   isWithinRoot,
+  isOverBudget,
+  loadTokenUsage,
+  saveTokenUsage,
 };
-export type { FileChange, ArtifactChange, AgentResult };
+export type { FileChange, ArtifactChange, AgentResult, TokenUsage };

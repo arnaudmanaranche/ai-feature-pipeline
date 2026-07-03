@@ -96,3 +96,7 @@ skip_dirs:
 memory_compact_every:
   prompt: 'How many shipped features between automatic project-memory.md compaction runs?'
   default: '10'
+
+max_tokens_per_feature:
+  prompt: 'Max cumulative OpenRouter tokens per feature before the pipeline refuses further calls? (0 = unlimited)'
+  default: '0'
