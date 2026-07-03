@@ -75,7 +75,37 @@ For fields where nothing was detected (empty string), explain what the field is 
 
 `pm`, `dev-review`, `pm-respond`, `architect`, `dev`, `review`, `qa`, `retro`, `memory-compact`
 
-Each role entry needs: `skill` (path to its prompt file under `skills/afp-pipeline/prompts/`, e.g. `skills/afp-pipeline/prompts/pm.md` — `memory-compact` uses `skills/afp-pipeline/prompts/memory-compact.md`), `model`, `artifact` (primary output filename), `description`, and `maxTokens`. `dev` additionally supports optional `typeSkills` and `extraSkills`. Use a smaller/cheaper model for `memory-compact` — it does bounded text reorganization, not novel reasoning.
+Each role entry needs: `skill` (path to its prompt file under `skills/afp-pipeline/prompts/`, e.g. `skills/afp-pipeline/prompts/pm.md` — `memory-compact` uses `skills/afp-pipeline/prompts/memory-compact.md`), `model`, `artifact` (primary output filename), `description`, and `maxTokens`. Use a smaller/cheaper model for `memory-compact` — it does bounded text reorganization, not novel reasoning.
+
+### Dev-only: `typeSkills` and `extraSkills`
+
+The `dev` role entry additionally supports two optional fields for injecting file-type- or language-specific coding standards into the Dev agent's context. Neither exists for any other role — only Dev writes source code.
+
+```json
+{
+  "roles": {
+    "dev": {
+      "skill": "skills/afp-pipeline/prompts/dev.md",
+      "model": "anthropic/claude-sonnet-4.5",
+      "artifact": "dev-log.md",
+      "description": "Developer",
+      "maxTokens": 8000,
+      "typeSkills": {
+        "*.ts": ".ai/skills/typescript-standards.md",
+        "*.tsx": ".ai/skills/react-standards.md",
+        "*.js": ".ai/skills/javascript-legacy-standards.md",
+        "src/services": ".ai/skills/service-conventions.md"
+      },
+      "extraSkills": [".ai/skills/security-baseline.md"]
+    }
+  }
+}
+```
+
+- **`typeSkills`** (`Record<pattern, skillFilePath>`) — matched per-file against the file paths the Architect's `technical-plan.md` says Dev needs to touch (`agent-runner.ts`'s `getMatchingTypeSkills`, covered by `agent-runner.test.ts`). A pattern starting with `*` matches by **suffix** (`*.ts` matches any `.ts` file, `*.test.ts` matches only test files); any other pattern matches by **path prefix or path segment** (`src/services` matches `src/services/api.ts` and `lib/src/services/x.ts`). Only skills whose pattern matches at least one impacted file get injected — this keeps the prompt from ballooning with irrelevant standards on a feature that never touches, say, `src/services`.
+- **`extraSkills`** (`string[]`) — injected into every single Dev run regardless of which files are touched. Use this for cross-cutting rules (security baseline, error-handling conventions) rather than `typeSkills`, which is deliberately conditional.
+- The skill files themselves (`.ai/skills/*.md` in the example above — the path is arbitrary, just needs to exist and be readable from the project root) are plain markdown you write yourself. There's no required structure; they're read verbatim and appended to Dev's system prompt under a `## <filename> (cross-cutting)` or matched-skill heading.
+- `typeSkills`/`extraSkills` paths are resolved from the project root, not from `skills/afp-pipeline/`, since they're project-specific standards, not part of the module.
 
 ## Configuration variables
 
