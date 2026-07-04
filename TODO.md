@@ -44,3 +44,17 @@ mechanics) — script for what's verifiable, skill for what needs context.
 this fails harmlessly (the pipeline still completes, just without opening anything) but there's no actual MR
 creation path. Would need a `glab mr create` branch (or GitLab REST API call) gated on detecting the git host
 from the remote URL, mirroring what `detectGithubRepo()` already half-does.
+
+## Provider abstraction — agent-runner.ts is hardcoded to OpenRouter
+
+`callOpenRouter()` hardcodes `https://openrouter.ai/api/v1/chat/completions` and the `OPENROUTER_API_KEY` env
+var name. The per-role model choice (`agents.json`) is independent of this and would survive a provider swap
+unchanged — but not everyone wants a dependency on OpenRouter specifically (direct provider billing/compliance,
+or just not wanting a proxy in the path).
+
+OpenRouter, OpenAI, Azure OpenAI, Groq, Together, Fireworks, and Ollama (local) all speak the same
+OpenAI-compatible chat-completions + tool-calling dialect — generalizing `openRouter.baseUrl` +
+`openRouter.apiKeyEnv` (rename conceptually to `llm.baseUrl`/`llm.apiKeyEnv`) covers all of them with no
+request/response shape changes, defaulting to OpenRouter for backward compatibility. Anthropic's native
+Messages API and Bedrock use a different shape entirely and would need a real adapter, not just a config
+change — scope that separately if/when needed.
