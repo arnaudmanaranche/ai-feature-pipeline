@@ -22,6 +22,10 @@ package_manager:
   prompt: 'Which package manager do you use?'
   default: 'npm'
 
+install_cmd:
+  prompt: 'Command to install dependencies in a fresh worktree (leave default unless your project needs something other than a plain install, e.g. --frozen-lockfile)?'
+  default: '{package_manager} install'
+
 run_script:
   prompt: 'How do you run TypeScript scripts? (must be a full runnable command, e.g. "npx tsx", "pnpm exec tsx", "ts-node")'
   default: 'npx tsx'

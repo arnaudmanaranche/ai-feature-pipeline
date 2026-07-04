@@ -35,6 +35,8 @@ read_config() {
   # falls through to the default value below, even when the key exists.
   node -e "try{var c=JSON.parse(require('fs').readFileSync('$ROOT/.ai/config.json','utf-8'));var p='$1'.replace(/^\./,'').split('.');for(var k of p)c=c[k];if(c===undefined)throw new Error('undefined');console.log(c)}catch(e){console.log('$2')}"
 }
+PACKAGE_MANAGER=$(read_config ".commands.packageManager" "npm")
+INSTALL_CMD=$(read_config ".commands.install" "$PACKAGE_MANAGER install")
 RUN_SCRIPT=$(read_config ".commands.runScript" "npx tsx")
 TYPECHECK_CMD=$(read_config ".commands.typecheck" "tsc --noEmit")
 LINT_CMD=$(read_config ".commands.lint" "eslint .")
@@ -63,10 +65,18 @@ setup_worktree() {
     return
   fi
   echo "==> Creating isolated worktree for $BRANCH at $WORKTREE_DIR"
+  # -c core.hooksPath=/dev/null: some post-checkout hooks (e.g. husky's
+  # "reinstall deps if the lockfile changed") assume $1/$2 are always real
+  # commit SHAs. `git worktree add -b` on a brand new branch passes the
+  # null SHA as the "previous HEAD", which such hooks don't handle and
+  # exit non-zero on — killing the whole run under `set -e`. This is scoped
+  # to worktree creation only; commit_stage() below still runs pre-commit
+  # hooks normally, since those are a real quality gate, unlike a
+  # dev-convenience checkout hook.
   if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-    git -C "$ROOT" worktree add "$WORKTREE_DIR" "$BRANCH"
+    git -c core.hooksPath=/dev/null -C "$ROOT" worktree add "$WORKTREE_DIR" "$BRANCH"
   else
-    git -C "$ROOT" worktree add -b "$BRANCH" "$WORKTREE_DIR" "$DEFAULT_BRANCH"
+    git -c core.hooksPath=/dev/null -C "$ROOT" worktree add -b "$BRANCH" "$WORKTREE_DIR" "$DEFAULT_BRANCH"
   fi
 }
 
@@ -108,6 +118,23 @@ setup_worktree
 PIPELINE_ROOT="$WORKTREE_DIR"
 
 cd "$PIPELINE_ROOT"
+
+# A git worktree shares the .git directory with $ROOT but starts with no
+# node_modules and no generated hook glue (e.g. husky's .husky/_/husky.sh,
+# which most package managers regenerate via a "prepare" lifecycle script
+# on install). Without this, typecheck/lint/test — and even `git commit`
+# itself if pre-commit hooks depend on installed tooling — all fail in the
+# worktree for reasons that have nothing to do with the feature being
+# built. Skipped if node_modules already exists (a resumed run reusing an
+# existing worktree, e.g. after the design-gate pause).
+if [ ! -d node_modules ]; then
+  echo "==> Installing dependencies in the isolated worktree ($INSTALL_CMD)..."
+  if ! ${INSTALL_CMD}; then
+    echo "  Dependency install failed in the worktree. Aborting."
+    echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
+    exit 1
+  fi
+fi
 
 run_agent() {
   local role=$1
@@ -228,7 +255,7 @@ run_memory_compact_if_due() {
     echo ""
     echo "==> $count features shipped — compacting .ai/project-memory.md..."
     run_agent memory-compact
-    commit_stage "agent(memory-compact): after $count features"
+    commit_stage "chore(memory-compact): after $count features"
   fi
 }
 
@@ -269,13 +296,13 @@ fi
 
 # 1. PM writes feature brief
 run_agent pm
-commit_stage "agent(pm): $SLUG"
+commit_stage "chore(pm): $SLUG"
 
 # 2. Dev review + clarification loop
 loop=0
 while [ $loop -lt $MAX_LOOPS ]; do
   run_agent dev-review
-  commit_stage "agent(dev-review): $SLUG"
+  commit_stage "chore(dev-review): $SLUG"
 
   VERDICT=$(read_verdict)
 
@@ -291,7 +318,7 @@ while [ $loop -lt $MAX_LOOPS ]; do
     echo ""
     echo "  Dev has questions. Running PM respond..."
     run_agent pm-respond
-    commit_stage "agent(pm-respond): $SLUG"
+    commit_stage "chore(pm-respond): $SLUG"
     loop=$((loop + 1))
     continue
   fi
@@ -333,7 +360,7 @@ while ! grep -q '```mermaid' "$ARTIFACTS_DIR/technical-plan.md" 2>/dev/null; do
   run_agent architect
 done
 
-commit_stage "agent(architect): $SLUG"
+commit_stage "chore(architect): $SLUG"
 
 # --- Design gate ---
 #
@@ -347,7 +374,7 @@ if [ ! -f "$APPROVAL_FLAG" ]; then
   if [ "$APPROVE_DESIGN" = "true" ]; then
     echo "==> Design approved via --approve-design."
     touch "$APPROVAL_FLAG"
-    commit_stage "agent(architect): design approved for $SLUG"
+    commit_stage "chore(architect): design approved for $SLUG"
   else
     echo ""
     echo "========================================="
@@ -373,7 +400,7 @@ TC_ATTEMPT=1
 while true; do
   if run_quality_gates; then
     echo "  Typecheck/lint/tests passed (attempt $TC_ATTEMPT). Committing..."
-    commit_stage "agent(dev): $SLUG"
+    commit_stage "chore(dev): $SLUG"
     break
   fi
 
@@ -421,7 +448,7 @@ fi
 REVIEW_ATTEMPT=1
 while true; do
   run_agent review
-  commit_stage "agent(review): $SLUG"
+  commit_stage "chore(review): $SLUG"
 
   REVIEW_VERDICT=$(read_verdict review)
   if [ "$REVIEW_VERDICT" != "FAIL" ]; then
@@ -446,13 +473,13 @@ while true; do
     echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
     exit 1
   fi
-  commit_stage "agent(dev): $SLUG (review fix)"
+  commit_stage "chore(dev): $SLUG (review fix)"
   REVIEW_ATTEMPT=$((REVIEW_ATTEMPT + 1))
 done
 
 # 6. QA
 run_agent qa
-commit_stage "agent(qa): $SLUG"
+commit_stage "chore(qa): $SLUG"
 
 QA_VERDICT=$(read_verdict qa)
 if [ "$QA_VERDICT" = "FAIL" ]; then
@@ -462,7 +489,7 @@ if [ "$QA_VERDICT" = "FAIL" ]; then
   # Run retro so learnings are captured, but skip PR creation
   run_agent retro
   FEATURE_COUNT=$(bump_memory_compact_counter)
-  commit_stage "agent(retro): $SLUG"
+  commit_stage "chore(retro): $SLUG"
   run_memory_compact_if_due "$FEATURE_COUNT"
 notify_skill_proposals
   if [ "$DRY_RUN" != "--dry-run" ]; then
@@ -478,7 +505,7 @@ fi
 # 7. Retrospective — compile session learnings
 run_agent retro
 FEATURE_COUNT=$(bump_memory_compact_counter)
-commit_stage "agent(retro): $SLUG"
+commit_stage "chore(retro): $SLUG"
 run_memory_compact_if_due "$FEATURE_COUNT"
 notify_skill_proposals
 
