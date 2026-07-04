@@ -58,3 +58,19 @@ OpenAI-compatible chat-completions + tool-calling dialect — generalizing `open
 request/response shape changes, defaulting to OpenRouter for backward compatibility. Anthropic's native
 Messages API and Bedrock use a different shape entirely and would need a real adapter, not just a config
 change — scope that separately if/when needed.
+
+### Distinct sub-case: people with only a Claude subscription, no API key
+
+The interactive skill mode (`/start afp-pipeline` run directly inside Claude Code) already covers this —
+Claude Code itself plays each role, no OpenRouter/API key involved at all. But it gets none of the
+orchestration machinery that lives in `run-pipeline.sh`/`agent-runner.ts`: worktree isolation, quality gates,
+retries, structured-output schema validation, per-role write permissions, the concurrency lock, the token
+budget. All of that is headless-script-only today, and the headless script only knows how to hit a raw HTTP
+API — which requires a key.
+
+Worth exploring: a third execution backend, alongside OpenRouter and generic-OpenAI-compatible, that invokes
+the Claude Code CLI itself in a scriptable/non-interactive way (if/however it supports that) as the model call
+inside `run-pipeline.sh`'s loop, instead of a `fetch()` to an HTTP endpoint. That would let someone whose only
+credential is their Claude subscription keep every safety mechanism built this session, with zero API key.
+Needs research into what Claude Code's CLI actually exposes for scripted/headless invocation before scoping
+further.
