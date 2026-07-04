@@ -81,24 +81,42 @@ function detectPackageManager() {
 
 function detectRunScript(pkg) {
   const devDeps = { ...pkg?.devDependencies, ...pkg?.dependencies };
+  // Bare `tsx`/`ts-node` assumes a global install, which usually isn't
+  // there — only trust the bare binary name when it's an actual project
+  // dependency (resolvable from node_modules/.bin); otherwise fall back to
+  // `npx tsx`, which fetches/runs it on demand without requiring the
+  // target project to add a new dependency just for this module.
   if (devDeps?.['tsx']) return 'tsx';
   if (devDeps?.['ts-node']) return 'ts-node';
   if (devDeps?.['bun']) return 'bun run';
-  return 'tsx';
+  return 'npx tsx';
 }
 
-function detectTypecheckCmd(pkg) {
+// `npm run <script>` was hardcoded regardless of the actually-detected
+// package manager below — harmless-looking but wrong for any pnpm/yarn/bun
+// project (found by running this against a real pnpm workspace: it
+// detected "pnpm" as the package manager one field over, then still
+// produced "npm run lint" for the lint command).
+function runScriptPrefix(packageManager) {
+  if (packageManager === 'yarn') return 'yarn run';
+  if (packageManager === 'bun') return 'bun run';
+  return `${packageManager} run`; // npm run / pnpm run
+}
+
+function detectTypecheckCmd(pkg, packageManager) {
   const scripts = pkg?.scripts || {};
-  for (const key of ['typecheck', 'type-check', 'tsc', 'ts']) {
-    if (scripts[key]) return `npm run ${key}`;
+  const prefix = runScriptPrefix(packageManager);
+  for (const key of ['typecheck', 'type-check', 'typescript', 'tsc', 'ts']) {
+    if (scripts[key]) return `${prefix} ${key}`;
   }
   return 'tsc --noEmit';
 }
 
-function detectLintCmd(pkg) {
+function detectLintCmd(pkg, packageManager) {
   const scripts = pkg?.scripts || {};
+  const prefix = runScriptPrefix(packageManager);
   for (const key of ['lint', 'eslint', 'lint:check']) {
-    if (scripts[key]) return `npm run ${key}`;
+    if (scripts[key]) return `${prefix} ${key}`;
   }
   const devDeps = { ...pkg?.devDependencies, ...pkg?.dependencies };
   if (devDeps?.['biome']) return 'biome lint .';
@@ -106,25 +124,27 @@ function detectLintCmd(pkg) {
   return 'eslint .';
 }
 
-function detectTestCmd(pkg) {
+function detectTestCmd(pkg, packageManager) {
   const scripts = pkg?.scripts || {};
+  const prefix = runScriptPrefix(packageManager);
   // `npm init`'s default placeholder always exits 1 — using it as a quality
   // gate would fail every single feature, so it's deliberately excluded
   // rather than trusted just because a "test" script key exists.
   const testScript = scripts['test'];
   if (testScript && !/no test specified/i.test(testScript)) {
-    return 'npm test';
+    return `${packageManager} test`;
   }
   for (const key of ['test:unit', 'test:ci']) {
-    if (scripts[key]) return `npm run ${key}`;
+    if (scripts[key]) return `${prefix} ${key}`;
   }
   return '';
 }
 
-function detectFormatCmd(pkg) {
+function detectFormatCmd(pkg, packageManager) {
   const scripts = pkg?.scripts || {};
+  const prefix = runScriptPrefix(packageManager);
   for (const key of ['format:check', 'fmt:check', 'format']) {
-    if (scripts[key]) return `npm run ${key}`;
+    if (scripts[key]) return `${prefix} ${key}`;
   }
   const devDeps = { ...pkg?.devDependencies, ...pkg?.dependencies };
   if (devDeps?.['biome']) return 'biome format .';
@@ -132,10 +152,11 @@ function detectFormatCmd(pkg) {
   return 'prettier --check .';
 }
 
-function detectFormatWriteCmd(pkg) {
+function detectFormatWriteCmd(pkg, packageManager) {
   const scripts = pkg?.scripts || {};
+  const prefix = runScriptPrefix(packageManager);
   for (const key of ['format:write', 'fmt', 'fmt:write']) {
-    if (scripts[key]) return `npm run ${key}`;
+    if (scripts[key]) return `${prefix} ${key}`;
   }
   const devDeps = { ...pkg?.devDependencies, ...pkg?.dependencies };
   if (devDeps?.['biome']) return 'biome format --write .';
@@ -373,11 +394,11 @@ const detected = {
   github_repo:        detectGithubRepo(),
   package_manager:    packageManager,
   run_script:         detectRunScript(pkg),
-  typecheck_cmd:      detectTypecheckCmd(pkg),
-  lint_cmd:           detectLintCmd(pkg),
-  test_cmd:           detectTestCmd(pkg),
-  format_cmd:         detectFormatCmd(pkg),
-  format_write_cmd:   detectFormatWriteCmd(pkg),
+  typecheck_cmd:      detectTypecheckCmd(pkg, packageManager),
+  lint_cmd:           detectLintCmd(pkg, packageManager),
+  test_cmd:           detectTestCmd(pkg, packageManager),
+  format_cmd:         detectFormatCmd(pkg, packageManager),
+  format_write_cmd:   detectFormatWriteCmd(pkg, packageManager),
   default_branch:     detectDefaultBranch(),
   branch_prefix:      'feat',
   locales,
