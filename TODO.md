@@ -23,3 +23,24 @@ Evaluate wiring in **Opik (by Comet)** for LLM observability — traces per agen
 evaluation/scoring hooks — instead of building bespoke logging further. Would likely hook in at
 `callOpenRouter()` in `agent-runner.ts` (wrap the fetch call) and log role/slug/model/tokens/latency/verdict
 per call as a trace.
+
+## afp-setup should read CI config, not just package.json
+
+Found while live-testing setup against a real pnpm/Next.js monorepo: `detect-stack.mjs` only reads
+`package.json` (scripts + deps), which needed two rounds of bug fixes (package-manager-agnostic commands,
+missing `typescript` script-key convention) to get right for just one repo — and still can't know things like
+"i18n is managed externally via Loco, not local locale files" or "this is GitLab, not GitHub, so `gh pr create`
+in run-pipeline.sh will never work here."
+
+Direction: keep `detect-stack.mjs` as the deterministic, free, reproducible first pass (package.json extraction
+is genuinely ground-truth and shouldn't be replaced by an LLM guess). But have the `afp-setup` skill itself
+also read `.gitlab-ci.yml`/`.github/workflows/*.yml`/README as a second, judgment-based pass to catch the
+institutional-knowledge fields a script can't (real CI gate commands, i18n tooling, git host/PR-vs-MR
+mechanics) — script for what's verifiable, skill for what needs context.
+
+## GitLab support — run-pipeline.sh's PR step is GitHub-only
+
+`run-pipeline.sh`'s final stage hardcodes `gh pr create`/`gh pr edit`/`gh pr list`. On a GitLab-hosted project
+this fails harmlessly (the pipeline still completes, just without opening anything) but there's no actual MR
+creation path. Would need a `glab mr create` branch (or GitLab REST API call) gated on detecting the git host
+from the remote URL, mirroring what `detectGithubRepo()` already half-does.
