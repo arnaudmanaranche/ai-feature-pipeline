@@ -26,6 +26,7 @@ import {
   saveTokenUsage,
   validateRegistry,
   REQUIRED_ROLES,
+  normalizeArtifactPath,
 } from './agent-runner.ts';
 
 describe('buildToolSchema', () => {
@@ -86,7 +87,7 @@ describe('parseToolArgs', () => {
       artifacts: [{ path: '.ai/artifacts/features/x/dev-log.md', action: 'create', content: 'log' }],
       verdict: 'PASS',
     });
-    const result = parseToolArgs(raw, 'review');
+    const result = parseToolArgs(raw, 'review', 'x');
     assert.equal(result.files.length, 1);
     assert.equal(result.artifacts.length, 1);
     assert.equal(result.verdict, 'PASS');
@@ -94,14 +95,14 @@ describe('parseToolArgs', () => {
   });
 
   test('missing arrays default to empty rather than throwing', () => {
-    const result = parseToolArgs(JSON.stringify({ verdict: 'clear' }), 'pm');
+    const result = parseToolArgs(JSON.stringify({ verdict: 'clear' }), 'pm', 'x');
     assert.deepEqual(result.files, []);
     assert.deepEqual(result.artifacts, []);
     assert.equal(result.verdict, 'clear');
   });
 
   test('non-string verdict is treated as absent, not coerced', () => {
-    const result = parseToolArgs(JSON.stringify({ artifacts: [], verdict: 123 }), 'qa');
+    const result = parseToolArgs(JSON.stringify({ artifacts: [], verdict: 123 }), 'qa', 'x');
     assert.equal(result.verdict, '');
   });
 });
@@ -474,5 +475,38 @@ describe('validateRegistry — .ai/agents.json schema validation', () => {
       validateRegistry({}, '.ai/agents.json')
     );
     assert.equal(exitCode, 1);
+  });
+});
+
+describe('normalizeArtifactPath — model-returned bare filenames', () => {
+  test('a bare filename gets prefixed with the feature artifact directory', () => {
+    // Found live: PM's task instructions spell out the full path, but the
+    // schema only describes the convention in prose — a real model still
+    // submitted "feature-brief.md" instead of the full path.
+    assert.equal(
+      normalizeArtifactPath('feature-brief.md', 'monthly-size-reminder'),
+      '.ai/artifacts/features/monthly-size-reminder/feature-brief.md'
+    );
+  });
+
+  test('a path already under .ai/ is left untouched', () => {
+    assert.equal(
+      normalizeArtifactPath('.ai/artifacts/features/x/dev-log.md', 'x'),
+      '.ai/artifacts/features/x/dev-log.md'
+    );
+    assert.equal(normalizeArtifactPath('.ai/project-memory.md', 'x'), '.ai/project-memory.md');
+  });
+});
+
+describe('parseToolArgs — end-to-end path normalization', () => {
+  test('an artifact submitted with a bare filename is written to the feature directory, not blocked', () => {
+    const raw = JSON.stringify({
+      artifacts: [{ path: 'feature-brief.md', action: 'update', content: 'brief' }],
+      verdict: 'clear',
+    });
+    const result = parseToolArgs(raw, 'pm', 'monthly-size-reminder');
+    assert.equal(result.artifacts[0].path, '.ai/artifacts/features/monthly-size-reminder/feature-brief.md');
+    const { allowed } = checkPermissions('pm', [], result.artifacts);
+    assert.equal(allowed, true);
   });
 });

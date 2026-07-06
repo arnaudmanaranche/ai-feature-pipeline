@@ -1053,7 +1053,22 @@ function buildTool(role: string) {
   };
 }
 
-function parseToolArgs(argsRaw: string, role: string): AgentResult {
+// Every role's task instructions spell out the exact artifact path (e.g.
+// `.ai/artifacts/features/<slug>/feature-brief.md`), but the JSON Schema
+// only *describes* that convention in prose, it doesn't enforce it — a
+// model can (and, observed live, does) still submit a bare filename like
+// "feature-brief.md" despite explicit instructions to use the full path.
+// Since every artifact unambiguously belongs under this feature's own
+// directory (or is .ai/project-memory.md, already anchored under .ai/),
+// normalizing a path that isn't already under .ai/ is safe: it only ever
+// adds the expected prefix, never redirects anywhere the model didn't
+// already say to write relative to its own working directory.
+function normalizeArtifactPath(path: string, slug: string): string {
+  if (path.startsWith('.ai/')) return path;
+  return `.ai/artifacts/features/${slug}/${path}`;
+}
+
+function parseToolArgs(argsRaw: string, role: string, slug: string): AgentResult {
   let parsed: any;
   try {
     parsed = JSON.parse(argsRaw);
@@ -1064,9 +1079,15 @@ function parseToolArgs(argsRaw: string, role: string): AgentResult {
     console.error(argsRaw);
     process.exit(1);
   }
+  const artifacts: ArtifactChange[] = Array.isArray(parsed.artifacts)
+    ? parsed.artifacts.map((a: ArtifactChange) => ({
+        ...a,
+        path: normalizeArtifactPath(a.path, slug),
+      }))
+    : [];
   return {
     files: Array.isArray(parsed.files) ? parsed.files : [],
-    artifacts: Array.isArray(parsed.artifacts) ? parsed.artifacts : [],
+    artifacts,
     verdict: typeof parsed.verdict === 'string' ? parsed.verdict : '',
     raw: argsRaw,
   };
@@ -1076,6 +1097,7 @@ function parseToolArgs(argsRaw: string, role: string): AgentResult {
 
 async function callOpenRouter(
   role: string,
+  slug: string,
   model: string,
   systemPrompt: string,
   userPrompt: string,
@@ -1134,7 +1156,7 @@ async function callOpenRouter(
         process.exit(1);
       }
       console.log(`  Tool call arguments: ${argsRaw.length} chars`);
-      const result = parseToolArgs(argsRaw, role);
+      const result = parseToolArgs(argsRaw, role, slug);
       if (typeof data.usage?.total_tokens === 'number') {
         result.usageTokens = data.usage.total_tokens;
         console.log(`  Tokens used this call: ${result.usageTokens}`);
@@ -1620,6 +1642,7 @@ async function main() {
     console.log('  Calling OpenRouter...');
     result = await callOpenRouter(
       role,
+      slug,
       config.model,
       systemPrompt,
       userPrompt,
@@ -1722,5 +1745,6 @@ export {
   saveTokenUsage,
   validateRegistry,
   REQUIRED_ROLES,
+  normalizeArtifactPath,
 };
 export type { FileChange, ArtifactChange, AgentResult, TokenUsage };
