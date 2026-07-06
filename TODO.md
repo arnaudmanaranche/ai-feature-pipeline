@@ -24,6 +24,23 @@ evaluation/scoring hooks — instead of building bespoke logging further. Would 
 `callOpenRouter()` in `agent-runner.ts` (wrap the fetch call) and log role/slug/model/tokens/latency/verdict
 per call as a trace.
 
+## afp-setup should exclude its own module content from the target's lint/format tooling
+
+Found live-testing on a real Expo/React Native project whose pre-commit hook runs whole-repo
+`prettier --check .` + `oxlint` unconditionally (not scoped to staged files). Two failures, both entirely from
+our own copied-in files, neither caused by anything wrong with the target project:
+- Every copied prompt/registry/config file was Prettier-unformatted relative to the target's own style — first
+  commit after `pnpm install` regenerates hook glue fails immediately.
+- `agent-runner.ts`'s `process.env[CONFIG.openRouter.apiKeyEnv]` (a correct, necessary dynamic access for a
+  plain Node script) tripped `expo(no-dynamic-env-var)` — a rule meant for the app's own Metro-bundled code,
+  applied blindly to a script that's never bundled.
+
+Fixed manually this session by running the target's own formatter once and adding `skills/`/`.ai/` to
+`.oxlintrc.json`'s `ignorePatterns` and `.prettierignore`. `afp-setup` should do both automatically as part of
+setup — run `commands.formatWrite` over the newly-added files, and add the module's install paths to whatever
+lint/format ignore file the target project uses (needs per-tool handling: `.prettierignore`, `.eslintignore`,
+`.oxlintrc.json`'s `ignorePatterns`, `.stylelintignore`, etc. — detect which exist and append to each).
+
 ## afp-setup should read CI config, not just package.json
 
 Found while live-testing setup against a real pnpm/Next.js monorepo: `detect-stack.mjs` only reads
