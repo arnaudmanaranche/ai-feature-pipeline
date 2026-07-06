@@ -496,6 +496,27 @@ describe('normalizeArtifactPath — model-returned bare filenames', () => {
     );
     assert.equal(normalizeArtifactPath('.ai/project-memory.md', 'x'), '.ai/project-memory.md');
   });
+
+  test('a "<slug>/filename" path (no .ai/artifacts/features/ prefix) is not double-nested', () => {
+    // Found live, one call after the bare-filename case: the same role
+    // returned a different partial form of the path on a different run —
+    // "monthly-size-reminder-notification/feature-brief.md". The old
+    // (bare-filename-only) fix re-prefixed the whole thing and produced
+    // .ai/artifacts/features/<slug>/<slug>/feature-brief.md — a duplicate
+    // nested path that left the real content somewhere dev-review never
+    // looked, while the placeholder stub at the expected path stayed empty.
+    assert.equal(
+      normalizeArtifactPath('monthly-size-reminder-notification/feature-brief.md', 'monthly-size-reminder-notification'),
+      '.ai/artifacts/features/monthly-size-reminder-notification/feature-brief.md'
+    );
+  });
+
+  test('a path with "artifacts/features/<slug>/" but missing the leading ".ai/" is fixed, not doubled', () => {
+    assert.equal(
+      normalizeArtifactPath('artifacts/features/x/dev-log.md', 'x'),
+      '.ai/artifacts/features/x/dev-log.md'
+    );
+  });
 });
 
 describe('parseToolArgs — end-to-end path normalization', () => {

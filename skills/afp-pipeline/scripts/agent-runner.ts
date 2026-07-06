@@ -1065,6 +1065,26 @@ function buildTool(role: string) {
 // already say to write relative to its own working directory.
 function normalizeArtifactPath(path: string, slug: string): string {
   if (path.startsWith('.ai/')) return path;
+
+  // Model included the "artifacts/features/<slug>/" segment but dropped
+  // the leading ".ai/" — keep from there on rather than re-prefixing the
+  // whole thing (which would double the slug directory).
+  const featureDirMarker = `artifacts/features/${slug}/`;
+  const markerIdx = path.indexOf(featureDirMarker);
+  if (markerIdx !== -1) {
+    return `.ai/${path.slice(markerIdx)}`;
+  }
+
+  // Model included just "<slug>/filename.md" (no .ai/artifacts/features/
+  // prefix at all) — same fix, different starting point. Found live: two
+  // consecutive real calls to the same role returned two different partial
+  // forms of the same expected path, so both have to be handled, not just
+  // the bare-filename case.
+  const slugPrefix = `${slug}/`;
+  if (path.startsWith(slugPrefix)) {
+    return `.ai/artifacts/features/${path}`;
+  }
+
   return `.ai/artifacts/features/${slug}/${path}`;
 }
 
