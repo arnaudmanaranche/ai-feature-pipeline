@@ -35,11 +35,14 @@ our own copied-in files, neither caused by anything wrong with the target projec
   plain Node script) tripped `expo(no-dynamic-env-var)` — a rule meant for the app's own Metro-bundled code,
   applied blindly to a script that's never bundled.
 
-Fixed manually this session by running the target's own formatter once and adding `skills/`/`.ai/` to
-`.oxlintrc.json`'s `ignorePatterns` and `.prettierignore`. `afp-setup` should do both automatically as part of
-setup — run `commands.formatWrite` over the newly-added files, and add the module's install paths to whatever
-lint/format ignore file the target project uses (needs per-tool handling: `.prettierignore`, `.eslintignore`,
-`.oxlintrc.json`'s `ignorePatterns`, `.stylelintignore`, etc. — detect which exist and append to each).
+Fixed manually this session by running the target's own formatter once, adding `skills/`/`.ai/` to
+`.oxlintrc.json`'s `ignorePatterns` and `.prettierignore`, and — found one stage later, same root cause —
+adding both to `tsconfig.json`'s `exclude` (the default typecheck gate scans the whole project too, and our
+Node-only scripts fail under the target's Expo/RN-flavored tsconfig: missing `@types/node`, no `allowImportingTsExtensions`, stricter `noImplicitAny`). `afp-setup` should do all of this automatically as part of setup —
+run `commands.formatWrite` over the newly-added files, and append the module's install paths to every
+lint/format/typecheck exclude mechanism the target project has (`.prettierignore`, `.eslintignore`,
+`.oxlintrc.json`'s `ignorePatterns`, `tsconfig.json`'s `exclude`, etc. — detect which config files exist and
+append to each rather than assuming one).
 
 ## afp-setup should read CI config, not just package.json
 
