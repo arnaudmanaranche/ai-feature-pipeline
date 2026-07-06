@@ -1053,6 +1053,21 @@ function buildTool(role: string) {
   };
 }
 
+// `tool_choice: {type:'function', function:{name:'submit_changes'}}` forces
+// the model to call THIS function, but nothing enforces that its arguments
+// actually satisfy the JSON Schema's `required` fields — that's purely a
+// hint to the model, not a server-side content check. Found live: a real
+// call (large ~87k-char user prompt) returned `{}` as the arguments —
+// syntactically valid JSON, calling the right function, satisfying none of
+// it. Without this check that silently became an empty AgentResult instead
+// of a retry.
+function missingRequiredFields(parsed: unknown, role: string): string[] {
+  const schema = buildToolSchema(role) as { required?: string[] };
+  const required = schema.required ?? [];
+  const obj = (parsed ?? {}) as Record<string, unknown>;
+  return required.filter(field => !(field in obj));
+}
+
 // Every role's task instructions spell out the exact artifact path (e.g.
 // `.ai/artifacts/features/<slug>/feature-brief.md`), but the JSON Schema
 // only *describes* that convention in prose, it doesn't enforce it — a
@@ -1176,6 +1191,31 @@ async function callOpenRouter(
         process.exit(1);
       }
       console.log(`  Tool call arguments: ${argsRaw.length} chars`);
+
+      let parsedForValidation: unknown = null;
+      try {
+        parsedForValidation = JSON.parse(argsRaw);
+      } catch {
+        // leave null — missingRequiredFields treats that as "everything missing"
+      }
+      const missing = missingRequiredFields(parsedForValidation, role);
+      if (missing.length > 0) {
+        lastError = `submit_changes arguments missing required field(s): ${missing.join(', ')} (raw: ${argsRaw})`;
+        if (attempt < MAX_RETRIES) {
+          const delay = BASE_DELAY * Math.pow(2, attempt - 1);
+          console.warn(
+            `  Model returned schema-invalid arguments (attempt ${attempt}/${MAX_RETRIES}): missing ${missing.join(', ')}. Retrying in ${delay}ms...`
+          );
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        console.error(
+          `OpenRouter kept returning schema-invalid submit_changes arguments after ${MAX_RETRIES} attempts: missing ${missing.join(', ')}`
+        );
+        console.error(argsRaw);
+        process.exit(1);
+      }
+
       const result = parseToolArgs(argsRaw, role, slug);
       if (typeof data.usage?.total_tokens === 'number') {
         result.usageTokens = data.usage.total_tokens;
@@ -1766,5 +1806,6 @@ export {
   validateRegistry,
   REQUIRED_ROLES,
   normalizeArtifactPath,
+  missingRequiredFields,
 };
 export type { FileChange, ArtifactChange, AgentResult, TokenUsage };

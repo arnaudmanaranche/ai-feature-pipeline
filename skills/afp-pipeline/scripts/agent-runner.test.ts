@@ -27,6 +27,7 @@ import {
   validateRegistry,
   REQUIRED_ROLES,
   normalizeArtifactPath,
+  missingRequiredFields,
 } from './agent-runner.ts';
 
 describe('buildToolSchema', () => {
@@ -529,5 +530,33 @@ describe('parseToolArgs — end-to-end path normalization', () => {
     assert.equal(result.artifacts[0].path, '.ai/artifacts/features/monthly-size-reminder/feature-brief.md');
     const { allowed } = checkPermissions('pm', [], result.artifacts);
     assert.equal(allowed, true);
+  });
+});
+
+describe('missingRequiredFields — enforcing the schema client-side', () => {
+  test('an empty object is missing everything the role requires', () => {
+    // Found live: a real model call with a huge (~87k char) user prompt
+    // returned literally "{}" as the submit_changes arguments — a
+    // syntactically valid call to the right function satisfying none of
+    // its required fields. tool_choice only forces which function is
+    // called, never that its arguments satisfy the schema.
+    assert.deepEqual(missingRequiredFields({}, 'architect'), ['artifacts']);
+    assert.deepEqual(missingRequiredFields({}, 'dev').sort(), ['artifacts', 'files']);
+    assert.deepEqual(missingRequiredFields({}, 'review').sort(), ['artifacts', 'verdict']);
+  });
+
+  test('null (unparseable JSON) is treated the same as an empty object', () => {
+    assert.deepEqual(missingRequiredFields(null, 'pm'), ['artifacts']);
+  });
+
+  test('a fully-populated payload is missing nothing', () => {
+    assert.deepEqual(
+      missingRequiredFields({ artifacts: [], files: [] }, 'dev'),
+      []
+    );
+    assert.deepEqual(
+      missingRequiredFields({ artifacts: [], verdict: 'PASS' }, 'review'),
+      []
+    );
   });
 });
