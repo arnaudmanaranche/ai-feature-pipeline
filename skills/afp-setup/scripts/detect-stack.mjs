@@ -311,10 +311,22 @@ function detectProjectName(pkg) {
 }
 
 function detectAppId(pkg) {
-  // expo app.json / app.config.js
+  // expo app.json (static)
   const appJson = readJson('app.json');
   if (appJson?.expo?.android?.package) return appJson.expo.android.package;
   if (appJson?.expo?.ios?.bundleIdentifier) return appJson.expo.ios.bundleIdentifier;
+
+  // expo app.config.ts / app.config.js (dynamic config — the modern Expo
+  // default, and JS/TS, so not readable as JSON). Regex-extracted from the
+  // raw text rather than imported/executed — this script only ever reads
+  // files, never runs project code.
+  for (const configFile of ['app.config.ts', 'app.config.js']) {
+    const text = readText(configFile);
+    const iosMatch = text.match(/bundleIdentifier\s*:\s*['"]([^'"]+)['"]/);
+    if (iosMatch) return iosMatch[1];
+    const androidMatch = text.match(/package\s*:\s*['"]([^'"]+)['"]/);
+    if (androidMatch) return androidMatch[1];
+  }
 
   // Capacitor
   const capacitorJson = readJson('capacitor.config.json');
