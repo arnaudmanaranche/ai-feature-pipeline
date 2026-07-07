@@ -82,7 +82,23 @@ interface ProjectConfig {
     localeDir: string;
   };
   e2e: { framework: string; dir: string };
-  openRouter: { apiKeyEnv: string; model: string; refererUrl: string };
+  openRouter: {
+    apiKeyEnv: string;
+    model: string;
+    refererUrl: string;
+    // OpenRouter provider-routing preferences, passed through verbatim.
+    // Optional — omitted from the request entirely when not configured.
+    // Added after a real project's Architect calls consistently hit a
+    // 504 "Upstream idle timeout exceeded" from Amazon Bedrock (one of
+    // OpenRouter's upstream providers for this model) on large prompts;
+    // `ignore` lets a project route around a specific upstream that's
+    // proving unreliable for it.
+    provider?: {
+      order?: string[];
+      ignore?: string[];
+      allow_fallbacks?: boolean;
+    };
+  };
   sourceDirs: string[];
   skipDirs: string[];
   providerNesting: string[];
@@ -1201,6 +1217,9 @@ async function callOpenRouter(
           },
           max_tokens: maxTokens,
           temperature: 0.3,
+          ...(CONFIG.openRouter.provider
+            ? { provider: CONFIG.openRouter.provider }
+            : {}),
         }),
       }
     );
