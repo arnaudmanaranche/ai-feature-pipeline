@@ -132,10 +132,12 @@ skills/
     │   └── memory-compact.md
     ├── scripts/                # Automation
     │   ├── agent-runner.ts          # LLM-agnostic agent executor
-    │   ├── agent-runner.test.ts     # Unit tests (schema, permissions, dry-run writes)
     │   ├── rebuild-context.mjs      # Repo memory builder (AST + incremental cache)
-    │   ├── rebuild-context.test.mjs # Unit tests
+    │   ├── eval-pipeline.mjs        # Output-quality eval harness (structural + optional LLM judge)
     │   └── run-pipeline.sh          # Full pipeline runner
+    ├── eval/                   # Evaluation harness data
+    │   ├── cases/                   # Golden rubric cases (*.json)
+    │   └── fixtures/                # Checked-in artifact sets the cases score against
     ├── registries/             # Registries
     │   ├── scope-checklist.md
     │   ├── ship-checklist.md
@@ -232,6 +234,23 @@ AI coding agents default to the shortest path from prompt to diff — which usua
 
 ---
 
+## Evaluation
+
+Unit tests prove the *scripts* are correct; they say nothing about whether the pipeline produces *good features*. The eval harness (`skills/afp-pipeline/scripts/eval-pipeline.mjs`) closes that gap by scoring produced artifacts against a rubric, so a prompt edit that quietly degrades output quality surfaces as a regression instead of reaching production.
+
+```bash
+npm run eval                              # score all golden cases (structural, offline, free)
+npm run eval -- --llm-judge               # additionally run the LLM-as-judge pass
+node .../eval-pipeline.mjs --case=settings-toggle --dir=.ai/artifacts/features/<slug>  # score a real run
+```
+
+Two layers, both dependency-free:
+
+- **Structural scoring** (default) — deterministic checks over each artifact: required sections present, mandatory Mermaid diagram present, no placeholders/`TBD`, a verdict recorded, etc. Each case (`eval/cases/*.json`) sets a `threshold`; the run exits non-zero if any case scores below it.
+- **LLM-as-judge** (`--llm-judge`, opt-in) — sends the artifacts to the model configured in `.ai/config.json` for a 1–5 rubric score. Skipped gracefully when no config/API key is present, so it never blocks the free structural pass.
+
+Golden cases point at checked-in fixture artifacts, so `npm run eval` is a self-contained regression run that also executes in CI.
+
 ## Development
 
 This repo itself has dev-only tooling (`package.json`, `test/`, not published, not installed by consumers) to unit-test the pipeline's scripts:
@@ -241,7 +260,7 @@ npm install
 npm test
 ```
 
-Tests cover `agent-runner.ts` (schema shape, per-role write permissions, dry-run write behavior) and `rebuild-context.mjs` (AST vs regex export/import extraction, incremental cache hit/miss/deletion). `.github/workflows/test.yml` runs `npm test` on every push and PR to `main`, so a change that breaks a test — or an untested behavior change that should have updated one — is caught before merge rather than relying on someone remembering to run it locally.
+Tests cover `agent-runner.ts` (schema shape, per-role write permissions, dry-run write behavior), `rebuild-context.mjs` (AST vs regex export/import extraction, incremental cache hit/miss/deletion), and `eval-pipeline.mjs` (rubric scoring passes a good artifact set and fails a degraded one, plus every shipped golden case actually meets its threshold). `.github/workflows/test.yml` runs `npm test` and `npm run eval` on every push and PR to `main`, so a change that breaks a test, degrades a golden case, or introduces an untested behavior change is caught before merge rather than relying on someone remembering to run it locally.
 
 ## Versioning
 

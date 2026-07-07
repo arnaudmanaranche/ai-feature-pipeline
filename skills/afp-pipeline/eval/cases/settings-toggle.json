@@ -1,0 +1,18 @@
+{
+  "name": "settings-toggle",
+  "description": "A canonical 'add a settings toggle' feature: brief with testable AC, a technical plan with a mandatory diagram, and a passing review. Used as a golden regression case for the pipeline's output quality.",
+  "rubric": "The brief must have testable acceptance criteria and no placeholders; the technical plan must include a Mermaid diagram, impacted files, and an implementation order; the review must record a verdict.",
+  "artifactsDir": "fixtures/settings-toggle",
+  "threshold": 1.0,
+  "minJudgeScore": 3,
+  "checks": [
+    { "artifact": "feature-brief.md", "type": "section", "value": "Acceptance criteria" },
+    { "artifact": "feature-brief.md", "type": "section", "value": "Scope" },
+    { "artifact": "feature-brief.md", "type": "absent", "value": "TBD" },
+    { "artifact": "feature-brief.md", "type": "absent", "value": "// ... rest" },
+    { "artifact": "technical-plan.md", "type": "contains", "value": "```mermaid" },
+    { "artifact": "technical-plan.md", "type": "section", "value": "Impacted" },
+    { "artifact": "technical-plan.md", "type": "section", "value": "Implementation order" },
+    { "artifact": "review-report.md", "type": "regex", "value": "Verdict.*(PASS|PASS_WITH_NOTES)" }
+  ]
+}
