@@ -2,6 +2,21 @@
 
 Known limitations not yet addressed — tracked here rather than fixed reactively.
 
+## Design agent — integrate Figma/Pencil/Storybook into the pipeline
+
+The pipeline currently goes PM → Dev Review → Architect → Dev → Review → QA → Retro with no role that checks
+the implementation against an actual design source of truth — Review's "diagram vs diff" check is structural
+consistency, not visual/UX fidelity. For any feature with a design file (Figma) or component-driven UI
+(Storybook), Dev could easily drift from the intended layout/spacing/tokens with nothing catching it before QA
+or a human.
+
+Direction to explore: a design-check step (either folded into an existing role like Review, or a new one)
+that pulls design context — e.g. via the Figma MCP server's `get_design_context`/`get_screenshot`, or a
+Storybook story/snapshot comparison — and cross-checks it against Dev's actual output (rendered component,
+screenshot, or token usage) before sign-off. Would need scoping: which stage it slots into, what "pass" means
+when no design file exists for a feature (same fallback pattern as the E2E/QA gate — BLOCKED_ENV vs brief-only
+judgment), and whether it's a hard gate or an advisory note in the artifact.
+
 ## Structural verification of diagram/skill-proposal gates
 
 The Architect's Mermaid diagram gate only checks that a ` ```mermaid ` block exists — not that it's meaningful.
