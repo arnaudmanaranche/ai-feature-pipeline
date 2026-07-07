@@ -1195,34 +1195,57 @@ async function callOpenRouter(
 
   let lastError: string = '';
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const response = await fetch(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-          'HTTP-Referer': CONFIG.openRouter.refererUrl,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-          tools: [tool],
-          tool_choice: {
-            type: 'function',
-            function: { name: 'submit_changes' },
+    let response: Response;
+    try {
+      response = await fetch(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+            'HTTP-Referer': CONFIG.openRouter.refererUrl,
           },
-          max_tokens: maxTokens,
-          temperature: 0.3,
-          ...(CONFIG.openRouter.provider
-            ? { provider: CONFIG.openRouter.provider }
-            : {}),
-        }),
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+            tools: [tool],
+            tool_choice: {
+              type: 'function',
+              function: { name: 'submit_changes' },
+            },
+            max_tokens: maxTokens,
+            temperature: 0.3,
+            ...(CONFIG.openRouter.provider
+              ? { provider: CONFIG.openRouter.provider }
+              : {}),
+          }),
+        }
+      );
+    } catch (err) {
+      // fetch() itself can throw on network-level failures (connection
+      // reset, read timeout, DNS failure) — found live: a real ETIMEDOUT
+      // on a retry attempt crashed the whole process uncaught, since only
+      // HTTP-level non-ok responses and schema-invalid content were
+      // handled as retryable. A network hiccup deserves the same backoff
+      // retry as a 502/503, not a hard crash.
+      lastError = `Network error calling OpenRouter: ${err instanceof Error ? err.message : String(err)}`;
+      if (attempt < MAX_RETRIES) {
+        const delay = BASE_DELAY * Math.pow(2, attempt - 1);
+        console.warn(
+          `  Network error (attempt ${attempt}/${MAX_RETRIES}): ${lastError}. Retrying in ${delay}ms...`
+        );
+        await new Promise(r => setTimeout(r, delay));
+        continue;
       }
-    );
+      console.error(
+        `OpenRouter call failed after ${MAX_RETRIES} attempts due to network errors: ${lastError}`
+      );
+      process.exit(1);
+    }
 
     if (response.ok) {
       const data = await response.json();
