@@ -44,6 +44,12 @@ TEST_CMD=$(read_config ".commands.test" "")
 BRANCH_PREFIX=$(read_config ".project.branchPrefix" "feat")
 MEMORY_COMPACT_EVERY=$(read_config ".project.memoryCompactEvery" "10")
 DEFAULT_BRANCH=$(read_config ".project.defaultBranch" "main")
+# Number of independent Review verifiers (adversarial panel). 1 = the
+# original single-reviewer behavior. >1 runs that many Review passes, each
+# with a distinct lens, and takes a majority vote (see run_review_panel).
+REVIEW_VERIFIERS=$(read_config ".review.verifiers" "1")
+[[ "$REVIEW_VERIFIERS" =~ ^[0-9]+$ ]] || REVIEW_VERIFIERS=1
+[ "$REVIEW_VERIFIERS" -lt 1 ] && REVIEW_VERIFIERS=1
 BRANCH="${BRANCH_PREFIX}/$SLUG"
 
 # --- Workspace isolation ---
@@ -331,6 +337,75 @@ read_verdict() {
   fi
 }
 
+# Adversarial Review panel. A single Review call is the pipeline's weakest
+# gate: nothing contradicts a plausible-but-wrong PASS. With
+# review.verifiers > 1, run that many independent Review passes, each given
+# a distinct lens (correctness/AC, diagram-vs-diff, edge-cases/security),
+# and decide by majority: the panel verdict is FAIL when at least ceil(n/2)
+# verifiers fail — so one flaky FAIL can't block, and one shallow PASS can't
+# wave a real defect through. Leaves review-report.md and
+# .agent-status-review.json in the same shape the rest of the pipeline
+# already reads, so the caller is unchanged. n=1 is exactly the old behavior.
+run_review_panel() {
+  local n="$REVIEW_VERIFIERS"
+  local lenses=(
+    "correctness and acceptance-criteria coverage"
+    "whether the git diff's actual control/data flow matches the Architect's Mermaid diagram"
+    "edge cases, error handling, input validation, and security"
+  )
+  local combined="$ARTIFACTS_DIR/review-report.md"
+  local tmp; tmp=$(mktemp)
+  echo "# Review report (adversarial panel of $n)" > "$tmp"
+  echo "" >> "$tmp"
+
+  local verdicts=() fails=0 i lens v
+  for (( i=1; i<=n; i++ )); do
+    lens="${lenses[$(( (i-1) % ${#lenses[@]} ))]}"
+    if [ "$n" -gt 1 ]; then
+      echo "  Review verifier $i/$n — lens: $lens"
+    fi
+    export AFP_REVIEW_LENS="$lens"
+    run_agent review
+    unset AFP_REVIEW_LENS
+    v=$(read_verdict review)
+    verdicts+=("${v:-none}")
+    [ "$v" = "FAIL" ] && fails=$((fails + 1))
+    {
+      echo "## Verifier $i — verdict: ${v:-none}"
+      echo "_Lens: ${lens}_"
+      echo ""
+      cat "$combined" 2>/dev/null || true
+      echo ""
+      echo "---"
+      echo ""
+    } >> "$tmp"
+  done
+
+  local majority=$(( (n + 1) / 2 ))
+  local final="PASS"
+  if [ "$fails" -ge "$majority" ]; then
+    final="FAIL"
+  else
+    for v in "${verdicts[@]}"; do
+      [ "$v" != "PASS" ] && final="PASS_WITH_NOTES"
+    done
+  fi
+
+  {
+    echo "## Panel decision: $final"
+    echo ""
+    echo "Verifiers: ${verdicts[*]} — FAIL count: $fails / $n (majority threshold: $majority)"
+  } >> "$tmp"
+  mv "$tmp" "$combined"
+
+  # Overwrite the review status verdict with the panel decision, preserving
+  # the provenance fields (model/promptSha) the last pass wrote.
+  node -e "var f='$ARTIFACTS_DIR/.agent-status-review.json';var s={};try{s=JSON.parse(require('fs').readFileSync(f,'utf-8'))}catch(e){};s.verdict='$final';s.panel={verifiers:$n,fails:$fails};require('fs').writeFileSync(f,JSON.stringify(s,null,2))"
+  if [ "$n" -gt 1 ]; then
+    echo "  Review panel decision: $final (verdicts: ${verdicts[*]})"
+  fi
+}
+
 # Session memory before context reset — .ai/project-memory.md lives across
 # features (committed on each feature branch, so it survives via merges),
 # but left to grow forever it stops being memory and starts being noise.
@@ -573,7 +648,7 @@ fi
 # code, so a retry means Dev incrementally fixes what's already there.
 REVIEW_ATTEMPT=1
 while true; do
-  run_agent review
+  run_review_panel
   commit_stage "chore(review): $SLUG" review
 
   REVIEW_VERDICT=$(read_verdict review)

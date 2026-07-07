@@ -765,6 +765,16 @@ function buildUserPrompt(
         `## Technical plan (Architect)\n\n\`\`\`markdown\n${techPlanForReview}\n\`\`\``
       );
     }
+    // Adversarial-review lens: when the pipeline runs a panel of verifiers,
+    // each pass gets a distinct focus via AFP_REVIEW_LENS so N reviewers
+    // catch failure modes redundancy alone would miss. Absent (single
+    // reviewer) → no extra focus, unchanged behavior.
+    const lens = process.env.AFP_REVIEW_LENS;
+    if (lens) {
+      sections.push(
+        `## Review focus for this pass\n\nYou are one verifier in an independent panel. Scrutinize this implementation specifically through the lens of **${lens}**. Be adversarial: actively try to find a real, blocking defect rather than confirming the happy path. If you find one, return FAIL. Still fill in the full review report.`
+      );
+    }
   }
 
   // Git diff (Review only)
