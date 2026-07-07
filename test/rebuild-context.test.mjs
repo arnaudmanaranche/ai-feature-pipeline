@@ -10,7 +10,7 @@ import {
   extractFile,
   buildContext,
   tryLoadTypescript,
-} from './rebuild-context.mjs';
+} from '../skills/afp-pipeline/scripts/rebuild-context.mjs';
 
 describe('regex fallback extraction', () => {
   test('extracts named and default exports by declaration kind', () => {

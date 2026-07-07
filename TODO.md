@@ -122,7 +122,7 @@ Directions worth exploring (not mutually exclusive):
   calling Dev, so a human can decide to split the feature into smaller ones rather than discovering the
   ceiling via a failed, paid call.
 
-## afp-setup's install step ships dev-only files (.test.ts/.test.mjs) into consumer projects
+## ~~afp-setup's install step ships dev-only files (.test.ts/.test.mjs) into consumer projects~~ — Fixed
 
 Found live: installing the module into little-nook by copying `skills/afp-pipeline` wholesale dragged
 `agent-runner.test.ts` and `rebuild-context.test.mjs` along with it. These use `node:test`/`node:assert` — the
@@ -131,9 +131,8 @@ Worse, they actively caused part of the friction already logged above (the tscon
 first typecheck errors traced back to `agent-runner.test.ts`'s `node:test` imports, before the real
 `skills/`/`.ai/` exclusion issue was even identified.
 
-This repo doesn't currently distinguish "ships to consumers" files from "dev-only" files within
-`skills/afp-pipeline/` — everything sits in one directory tree. `afp-setup`'s install step (or whatever
-packaging mechanism ends up wrapping it — see the bmad-method install path in the README) should explicitly
-exclude `*.test.ts`/`*.test.mjs` (and anything else dev-only, e.g. this repo's own `package.json`/CI config if
-ever copied) when installing into a target project. Until that's automated, doing it by hand (as done for
-little-nook) is a reasonable stopgap for further live tests.
+**Fix**: moved both test files out of `skills/afp-pipeline/scripts/` into a top-level `test/` directory
+(alongside the repo's own dev-only `package.json`), which is never part of `skills/afp-pipeline/` and so can't
+be dragged along by a wholesale copy of that directory, regardless of what packaging mechanism does the
+copying. Updated their imports to point back at the scripts under `skills/afp-pipeline/scripts/`, and updated
+`package.json`'s `test` script and the README's dev-tooling description accordingly.

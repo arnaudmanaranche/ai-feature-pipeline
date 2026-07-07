@@ -29,7 +29,7 @@ import {
   normalizeArtifactPath,
   missingRequiredFields,
   trimContextForPrompt,
-} from './agent-runner.ts';
+} from '../skills/afp-pipeline/scripts/agent-runner.ts';
 
 describe('buildToolSchema', () => {
   test('only the dev role accepts a files array', () => {

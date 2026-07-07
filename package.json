@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Dev-only tooling for the AI Feature Pipeline module (not published, not installed by consumers).",
   "scripts": {
-    "test": "node --import tsx --test skills/afp-pipeline/scripts/*.test.ts skills/afp-pipeline/scripts/*.test.mjs"
+    "test": "node --import tsx --test test/*.test.ts test/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

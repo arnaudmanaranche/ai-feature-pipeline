@@ -116,7 +116,7 @@ Full list in `skills/afp-setup/assets/module.yaml`.
 
 ### Models
 
-Each role in `.ai/agents.json` picks its own OpenRouter model — cheaper/faster for bounded tasks like `memory-compact`, stronger for `architect`/`dev`/`review`. Requires the `OPENROUTER_API_KEY` env var (or the key name configured at `openRouter.apiKeyEnv` in `.ai/config.json`). Override any single role's model at runtime without touching `agents.json`, e.g.:
+Each role in `.ai/agents.json` picks its own model, called through any OpenAI-compatible chat-completions API — OpenRouter by default, but also OpenAI, Azure OpenAI, Groq, Together, Fireworks, or a local Ollama, by pointing `llm.baseUrl` in `.ai/config.json` elsewhere. Use a cheaper/faster model for bounded tasks like `memory-compact`, stronger for `architect`/`dev`/`review`. Requires the `OPENROUTER_API_KEY` env var (or the key name configured at `llm.apiKeyEnv` in `.ai/config.json`). Override any single role's model at runtime without touching `agents.json`, e.g.:
 
 ```bash
 OPENROUTER_MODEL_DEV=anthropic/claude-opus-4.6 bash skills/afp-pipeline/scripts/run-pipeline.sh my-feature
@@ -162,7 +162,7 @@ If this file is absent, QA is instructed to use `BLOCKED_ENV` rather than fabric
 
 ## Development
 
-This repo itself has dev-only tooling (`package.json`, not published, not installed by consumers) to unit-test the pipeline's scripts:
+This repo itself has dev-only tooling (`package.json`, `test/`, not published, not installed by consumers) to unit-test the pipeline's scripts:
 
 ```bash
 npm install
