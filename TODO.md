@@ -72,6 +72,31 @@ from the remote URL, mirroring what `detectGithubRepo()` already half-does.
 Messages API and Bedrock use a different request/response shape entirely and would need a real adapter, not
 just a config change — scope that separately if/when needed.
 
+## agent-runner.ts still names the generic call site `callOpenRouter`
+
+The function that does the actual HTTP call (now provider-agnostic via `llm.baseUrl`) is still named
+`callOpenRouter()`. Misleading now that it's not OpenRouter-specific — should be renamed (e.g. `callLlm`) as
+part of any future touch to that area. Most of the remaining "OpenRouter" mentions elsewhere in the file are
+legitimate (they describe real OpenRouter-specific incidents/behavior — the Bedrock 504 timeout, the
+provider-routing extension, the default backend), so a blanket search-and-replace isn't the right fix; this
+one function name is the actual leftover.
+
+## detect-stack.mjs is growing into a god-file
+
+432 lines and climbing every time a new stack signal gets added (package manager, analytics, paywall, backend,
+error tracking, e2e, router, styling, locales...). Not unmanageable yet, but worth splitting into per-concern
+detectors (e.g. `detect-analytics.mjs`, `detect-paywall.mjs`) before it becomes one, especially since the
+"afp-setup should read CI config" item above will add even more detection surface to the same file.
+
+## app_id / paywall_provider assume a mobile app regardless of project type
+
+`module.yaml` prompts for `app_id` ("What is your app bundle ID?", default `com.example.app`) unconditionally
+— meaningless for a webapp. `detect-stack.mjs`'s paywall detection also mixes mobile-only providers
+(RevenueCat, expo-iap) with web-capable ones (Stripe) without distinguishing project type first. Direction:
+detect project type (mobile vs web, e.g. via Expo/React Native vs Next.js/Vite presence) as an early signal in
+`detect-stack.mjs`, and skip/relabel mobile-specific prompts (`app_id`, paywall provider framing) when the
+target is a webapp.
+
 ### Distinct sub-case: people with only a Claude subscription, no API key
 
 The interactive skill mode (`/start afp-pipeline` run directly inside Claude Code) already covers this —
