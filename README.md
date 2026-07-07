@@ -1,40 +1,114 @@
 # AI Feature Pipeline
 
-A structured, multi-agent pipeline for AI-assisted feature development. **Model-agnostic, stack-agnostic.**
+**A structured, multi-agent pipeline for AI-assisted feature development. Model-agnostic, stack-agnostic.**
 
-PM → Dev Review → Architect → Dev → Review → QA → Retro — each role produces artifacts, gates, and handoffs.
+Each role produces artifacts, gates, and handoffs — so shipping a feature with an AI agent looks like shipping one with a team, not a single unreviewed diff.
+
+```
+  SCOPE           CLARIFY         DESIGN          BUILD           REVIEW          VERIFY          LEARN
+ ┌──────┐      ┌──────────┐    ┌──────────┐    ┌──────┐       ┌────────┐     ┌──────┐        ┌───────┐
+ │  PM  │ ───▶ │Dev Review│ ─▶ │Architect │ ─▶ │  Dev │ ────▶ │ Review │ ──▶ │  QA  │ ─────▶ │ Retro │
+ │Brief │      │   Q&A    │    │   Plan   │    │ Code │       │ Verdict│     │Verify│        │Memory │
+ └──────┘      └──────────┘    └──────────┘    └──────┘       └────────┘     └──────┘        └───────┘
+```
+
+---
 
 ## Quick start
 
-### Prerequisites
-- Node.js 18+
-- An AI coding tool (Claude Code, Codex, OpenCode, Cline)
-- A BMad Method installation (`npx bmad-method`)
-
-### Installation
+**Prerequisites:** Node.js 18+, an AI coding tool (Claude Code, Codex, OpenCode, Cline), and a BMad Method installation (`npx bmad-method`).
 
 ```bash
-npx bmad-method install --custom-source https://github.com/org/ai-feature-pipeline
+npx bmad-method install --custom-source https://github.com/arnaudmanaranche/ai-feature-pipeline
 ```
 
-### First-time setup
+<details>
+<summary><b>Claude Code</b></summary>
 
 ```bash
-# Run the setup skill to configure your project
 /start afp-setup
 ```
 
-Or interactively through your AI tool: "Run the AFP Setup skill."
+Or interactively: "Run the AFP Setup skill."
 
-### Start a feature
+</details>
+
+<details>
+<summary><b>Codex / OpenCode / Cline / other agents</b></summary>
+
+Skills are plain Markdown with accompanying scripts — any agent that can read a `SKILL.md` and run shell commands can drive the pipeline. Point your agent at `skills/afp-setup/SKILL.md` first, then `skills/afp-pipeline/SKILL.md`.
+
+</details>
+
+Once set up, start a feature:
 
 ```bash
 /start afp-pipeline new "Add dark mode toggle"
 ```
 
-Or through your AI tool: "Run the AFP Pipeline to scope a new feature."
+Or interactively: "Run the AFP Pipeline to scope a new feature."
 
-## Module structure
+---
+
+## Modules
+
+| Module | What it does | Use when |
+|--------|--------------|----------|
+| [afp-setup](skills/afp-setup/SKILL.md) | Auto-detects your stack, generates `.ai/config.json` and `.ai/agents.json`, copies governance files and registries into `.ai/` | First-time install in a project |
+| [afp-pipeline](skills/afp-pipeline/SKILL.md) | Runs the 7-role feature workflow end to end inside an isolated git worktree, from brief to PR | Every feature, from `new "<description>"` |
+
+---
+
+## Pipeline stages
+
+| Stage | Role | Produces | Gate |
+|-------|------|----------|------|
+| 1 | PM | `feature-brief.md` — requirements, AC, scope | |
+| 2 | Dev Review | `pm-dev-thread.md` — clarification Q&A (loops up to 3×) | exits on `blocked` |
+| 3 | Architect | `technical-plan.md` (with a mandatory Mermaid diagram) + `repository-context.md` | **Diagram gate** — missing ` ```mermaid ` block triggers 1 automatic retry, then aborts. **Design gate** — pipeline then pauses (exit 0) until a human reviews the plan and re-runs with `--approve-design` |
+| 4 | Dev | Code changes + `dev-log.md` | typecheck gate, 1 retry |
+| 5 | Review | `review-report.md` — verdict PASS / PASS_WITH_NOTES / FAIL, checks the diff against the Architect's diagram | FAIL feeds findings back to Dev, 1 retry; halts before QA and PR if still FAIL |
+| 6 | QA | `qa-report.md` — verdict PASS / FAIL / BLOCKED_ENV | FAIL skips PR creation |
+| 7 | Retro | `retrospective.md` + `.ai/project-memory.md`, plus a skill proposal at `.ai/artifacts/skill-proposals/<name>.md` if a pattern has recurred 3+ times | |
+| — | Memory Compact | rewrites `.ai/project-memory.md` | Runs every `project.memoryCompactEvery` shipped features (default 10), not per-feature |
+
+`.ai/project-memory.md` is read by **every** role, not just PM/Architect/Retro, and is organized into four fixed categories (Pitfalls, Conventions confirmed, Architecture decisions, Integration notes) instead of growing one section per feature forever. The Memory Compact role periodically deduplicates and prunes it — note that both this counter and the memory file itself live on feature branches, so they only accumulate correctly across features whose PRs get merged in between runs.
+
+Every run (including `--dry-run`) executes inside a dedicated git worktree under `../.afp-worktrees/`, isolated from your working checkout. The worktree is removed automatically once the pipeline reaches a PR (or a dry-run rehearsal completes); it's preserved for inspection whenever the pipeline halts on a blocker, a failed gate, or exhausted retries.
+
+A fresh worktree has no `node_modules` and none of the generated hook glue some tools regenerate on install (e.g. husky's `.husky/_/husky.sh`). The pipeline runs `commands.install` (default: `<packageManager> install`) once per worktree, before any agent, and skips it on a resumed run that already has `node_modules`. Agent commits use `chore(<role>): <slug>` rather than `agent(<role>): <slug>` specifically so they pass a standard conventional-commits `commitlint` type-enum out of the box.
+
+---
+
+## How a role works
+
+Every role in `.ai/agents.json` shares the same anatomy:
+
+```
+┌───────────────────────────────────────────────────┐
+│  <role>.md prompt                                  │
+│                                                    │
+│  Governance     → .ai/GOVERNANCE.md, DENIED_ACTIONS.md (injected)
+│  Input          → prior role's artifacts + project-memory.md
+│  Output         → forced tool call `submit_changes`, │
+│                    validated against a per-role      │
+│                    JSON Schema ({files, artifacts,   │
+│                    verdict})                         │
+│  Permissions    → write access enforced in           │
+│                    agent-runner.ts, independent of    │
+│                    what the prompt says               │
+│  Gate           → typecheck / diagram / verdict check │
+│                    decides retry, halt, or handoff    │
+└───────────────────────────────────────────────────┘
+```
+
+**Key design choices:**
+
+- **Structured output, not parsed prose.** A model that phrases its response slightly differently still produces a schema-valid object — there's no silent "0 files parsed" failure from formatting drift.
+- **Per-role write permissions enforced in code, not in the prompt.** PM/Architect/Review/QA/Retro cannot write source files at all; only Dev can, and only to configured extensions.
+- **Gates decide control flow, not the model.** Retry, halt, and handoff are deterministic checks in `run-pipeline.sh`, not something the agent decides for itself.
+
+## Project structure
 
 ```
 skills/
@@ -57,7 +131,7 @@ skills/
     │   ├── retro.md
     │   └── memory-compact.md
     ├── scripts/                # Automation
-    │   ├── agent-runner.ts          # OpenRouter-based agent executor
+    │   ├── agent-runner.ts          # LLM-agnostic agent executor
     │   ├── agent-runner.test.ts     # Unit tests (schema, permissions, dry-run writes)
     │   ├── rebuild-context.mjs      # Repo memory builder (AST + incremental cache)
     │   ├── rebuild-context.test.mjs # Unit tests
@@ -76,24 +150,7 @@ skills/
             └── new-feature.sh  # Copied to .ai/scripts/new-feature.sh
 ```
 
-## Pipeline stages
-
-| Stage | Role | Produces | Gate |
-|-------|------|----------|------|
-| 1 | PM | `feature-brief.md` — requirements, AC, scope | |
-| 2 | Dev Review | `pm-dev-thread.md` — clarification Q&A (loops up to 3×) | exits on `blocked` |
-| 3 | Architect | `technical-plan.md` (with a mandatory Mermaid diagram) + `repository-context.md` | **Diagram gate** — missing ` ```mermaid ` block triggers 1 automatic retry, then aborts. **Design gate** — pipeline then pauses (exit 0) until a human reviews the plan and re-runs with `--approve-design` |
-| 4 | Dev | Code changes + `dev-log.md` | typecheck gate, 1 retry |
-| 5 | Review | `review-report.md` — verdict PASS / PASS_WITH_NOTES / FAIL, checks the diff against the Architect's diagram | FAIL feeds findings back to Dev, 1 retry; halts before QA and PR if still FAIL |
-| 6 | QA | `qa-report.md` — verdict PASS / FAIL / BLOCKED_ENV | FAIL skips PR creation |
-| 7 | Retro | `retrospective.md` + `.ai/project-memory.md`, plus a skill proposal at `.ai/artifacts/skill-proposals/<name>.md` if a pattern has recurred 3+ times | |
-| — | Memory Compact | rewrites `.ai/project-memory.md` | Runs every `project.memoryCompactEvery` shipped features (default 10), not per-feature |
-
-`.ai/project-memory.md` is read by **every** role, not just PM/Architect/Retro, and is organized into four fixed categories (Pitfalls, Conventions confirmed, Architecture decisions, Integration notes) instead of growing one section per feature forever. The Memory Compact role periodically deduplicates and prunes it — note that both this counter and the memory file itself live on feature branches, so they only accumulate correctly across features whose PRs get merged in between runs.
-
-Every run (including `--dry-run`) executes inside a dedicated git worktree under `../.afp-worktrees/`, isolated from your working checkout. The worktree is removed automatically once the pipeline reaches a PR (or a dry-run rehearsal completes); it's preserved for inspection whenever the pipeline halts on a blocker, a failed gate, or exhausted retries.
-
-A fresh worktree has no `node_modules` and none of the generated hook glue some tools regenerate on install (e.g. husky's `.husky/_/husky.sh`). The pipeline runs `commands.install` (default: `<packageManager> install`) once per worktree, before any agent, and skips it on a resumed run that already has `node_modules`. Agent commits use `chore(<role>): <slug>` rather than `agent(<role>): <slug>` specifically so they pass a standard conventional-commits `commitlint` type-enum out of the box.
+---
 
 ## Configuration
 
@@ -110,7 +167,7 @@ Generated by `afp-setup` into `.ai/config.json`:
 | `stack.analytics.provider` | Analytics provider | `""` |
 | `stack.paywall.provider` | Paywall provider | `""` |
 | `e2e.framework` | E2E framework | `""` |
-| `project.maxTokensPerFeature` | Circuit breaker on cumulative real OpenRouter token spend per feature. `0`/unset = unlimited | `0` |
+| `project.maxTokensPerFeature` | Circuit breaker on cumulative real LLM token spend per feature. `0`/unset = unlimited | `0` |
 
 Full list in `skills/afp-setup/assets/module.yaml`.
 
@@ -158,7 +215,15 @@ If this file is absent, QA is instructed to use `BLOCKED_ENV` rather than fabric
 - **Path containment** — every file/artifact path in a model's structured output is untrusted input. `join(root, path)` alone does not stop a `../`-containing path from resolving outside the project — a real containment check (resolved-path prefix comparison) runs before any read or write, independent of the per-role extension/pattern regexes (which only check the string, not the resolved location).
 - **Hook-respecting commits** — the pipeline never uses `git commit --no-verify`. A real pre-commit hook rejection stops the run instead of being silently bypassed.
 - **Concurrency lock** — a best-effort `mkdir`-based lock per slug under `.afp-worktrees/.locks/` prevents two invocations (an accidental double-trigger, a misconfigured cron/CI) from racing on the same worktree/branch. A lock held by a dead PID is detected and reclaimed automatically; a lock held by a live process blocks the second run with a clear message.
-- **Token budget circuit breaker** — a retry loop stacking across several stages (typecheck, lint, Review) has no inherent ceiling on OpenRouter spend. `project.maxTokensPerFeature`, if set, tracks cumulative real usage per feature (`.agent-token-usage.json`) and refuses to make further calls once exceeded, rather than retrying indefinitely at your expense.
+- **Token budget circuit breaker** — a retry loop stacking across several stages (typecheck, lint, Review) has no inherent ceiling on real LLM spend. `project.maxTokensPerFeature`, if set, tracks cumulative real usage per feature (`.agent-token-usage.json`) and refuses to make further calls once exceeded, rather than retrying indefinitely at your expense.
+
+---
+
+## Why AFP?
+
+AI coding agents default to the shortest path from prompt to diff — which usually means no scoping, no design review, no QA, and no memory of what was tried before. AI Feature Pipeline forces the same discipline a human team applies before merging: a written brief, a reviewed technical plan with a diagram, a code review against that plan, a QA verdict, and a retro that feeds back into the next feature. Every gate exists because skipping it is exactly where an unsupervised agent goes wrong.
+
+---
 
 ## Development
 
