@@ -29,7 +29,7 @@ Each stage produces an artifact in `.ai/artifacts/features/<slug>/`.
 ### 3. Architect — Software Architect
 **Prompt:** `prompts/architect.md`
 **Output:** `technical-plan.md` (including a mandatory Mermaid diagram of the actual flow) + `repository-context.md` — architecture, impacted files, risks, implementation order
-**Gate:** Diagram gate — a plan with no ` ```mermaid ` block triggers one automatic retry, then aborts if still missing. Design gate — the pipeline then pauses (exit 0) — no code is written until a human has read the plan and re-runs with `--approve-design` (or the flag `.ai/artifacts/features/<slug>/.architect-approved` already exists from a prior approved run).
+**Gate:** Diagram gate — a plan with no ` ```mermaid ` block triggers one automatic retry, then aborts if still missing. Design gate — the pipeline then pauses (exit 0) — no code is written until a human has read the plan and re-runs with `--approve-design`. A resumed run reuses the exact plan the human reviewed (it does not regenerate the non-deterministic Architect output), and the approval is bound to the plan's content hash stored in `.ai/artifacts/features/<slug>/.architect-approved`: if the plan changes afterward, the stored hash no longer matches and re-approval is required.
 
 ### 4. Dev — Developer
 **Prompt:** `prompts/dev.md`

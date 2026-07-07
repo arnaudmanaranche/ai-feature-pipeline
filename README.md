@@ -65,7 +65,7 @@ Or interactively: "Run the AFP Pipeline to scope a new feature."
 |-------|------|----------|------|
 | 1 | PM | `feature-brief.md` — requirements, AC, scope | |
 | 2 | Dev Review | `pm-dev-thread.md` — clarification Q&A (loops up to 3×) | exits on `blocked` |
-| 3 | Architect | `technical-plan.md` (with a mandatory Mermaid diagram) + `repository-context.md` | **Diagram gate** — missing ` ```mermaid ` block triggers 1 automatic retry, then aborts. **Design gate** — pipeline then pauses (exit 0) until a human reviews the plan and re-runs with `--approve-design` |
+| 3 | Architect | `technical-plan.md` (with a mandatory Mermaid diagram) + `repository-context.md` | **Diagram gate** — missing ` ```mermaid ` block triggers 1 automatic retry, then aborts. **Design gate** — pipeline then pauses (exit 0) until a human reviews the plan and re-runs with `--approve-design`. A resumed run reuses the reviewed plan verbatim (no regeneration) and binds the approval to the plan's content hash — a changed plan forces re-approval |
 | 4 | Dev | Code changes + `dev-log.md` | typecheck gate, 1 retry |
 | 5 | Review | `review-report.md` — verdict PASS / PASS_WITH_NOTES / FAIL, checks the diff against the Architect's diagram | FAIL feeds findings back to Dev, 1 retry; halts before QA and PR if still FAIL |
 | 6 | QA | `qa-report.md` — verdict PASS / FAIL / BLOCKED_ENV | FAIL skips PR creation |

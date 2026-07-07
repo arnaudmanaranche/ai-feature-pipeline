@@ -220,6 +220,18 @@ run_quality_gates() {
   return 0
 }
 
+# Content hash of a file, portable across macOS (shasum) and Linux
+# (sha256sum). Used to bind a design approval to the exact plan a human
+# reviewed — if the plan changes, the recorded hash no longer matches and
+# re-approval is required.
+plan_hash() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
 read_verdict() {
   local role=${1:-}
   local file
@@ -340,27 +352,38 @@ if [ "$(read_verdict)" = "questions" ]; then
   exit 1
 fi
 
-# 3. Rebuild context.json from source, then Architect produces technical plan
-echo "==> Rebuilding context.json..."
-node "$SCRIPT_DIR/rebuild-context.mjs" --project-root="$PIPELINE_ROOT"
-run_agent architect
-
-# Diagrams before handwavy systems: a technical plan without a Mermaid
-# diagram is prose, not a plan Review can actually check the diff against.
-# Enforced structurally here, not just via prompt wording — one retry.
-DIAGRAM_ATTEMPT=1
-while ! grep -q '```mermaid' "$ARTIFACTS_DIR/technical-plan.md" 2>/dev/null; do
-  if [ "$DIAGRAM_ATTEMPT" -ge 2 ]; then
-    echo "  Architect did not produce a required Mermaid diagram after retry. Aborting."
-    echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
-    exit 1
-  fi
-  echo "  technical-plan.md is missing a \`\`\`mermaid diagram (attempt $DIAGRAM_ATTEMPT). Retrying Architect..."
-  DIAGRAM_ATTEMPT=$((DIAGRAM_ATTEMPT + 1))
+# 3. Rebuild context.json from source, then Architect produces technical plan.
+#
+# On a RESUMED run — the worktree already carries a technical-plan.md from a
+# prior invocation that paused at the design gate — do NOT regenerate the
+# plan. The Architect runs at temperature > 0, so re-running it produces a
+# *different* plan than the one the human actually reviewed; --approve-design
+# would then greenlight code generation from a plan nobody saw. Reuse the
+# exact reviewed plan instead.
+if [ -f "$ARTIFACTS_DIR/technical-plan.md" ]; then
+  echo "==> Reusing existing technical plan (resumed run) — not regenerating it."
+else
+  echo "==> Rebuilding context.json..."
+  node "$SCRIPT_DIR/rebuild-context.mjs" --project-root="$PIPELINE_ROOT"
   run_agent architect
-done
 
-commit_stage "chore(architect): $SLUG"
+  # Diagrams before handwavy systems: a technical plan without a Mermaid
+  # diagram is prose, not a plan Review can actually check the diff against.
+  # Enforced structurally here, not just via prompt wording — one retry.
+  DIAGRAM_ATTEMPT=1
+  while ! grep -q '```mermaid' "$ARTIFACTS_DIR/technical-plan.md" 2>/dev/null; do
+    if [ "$DIAGRAM_ATTEMPT" -ge 2 ]; then
+      echo "  Architect did not produce a required Mermaid diagram after retry. Aborting."
+      echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
+      exit 1
+    fi
+    echo "  technical-plan.md is missing a \`\`\`mermaid diagram (attempt $DIAGRAM_ATTEMPT). Retrying Architect..."
+    DIAGRAM_ATTEMPT=$((DIAGRAM_ATTEMPT + 1))
+    run_agent architect
+  done
+
+  commit_stage "chore(architect): $SLUG"
+fi
 
 # --- Design gate ---
 #
@@ -369,11 +392,28 @@ commit_stage "chore(architect): $SLUG"
 # pauses here (exit 0, not a failure) unless the plan was already approved
 # in a prior run, or --approve-design was passed explicitly (e.g. a CI job
 # re-triggered after a human approved the design-only PR/commit).
+#
+# The approval is bound to the plan's *content hash*, not just a marker
+# file's existence: an approval recorded for one plan does not silently
+# carry over to a different plan. If technical-plan.md changes after
+# approval (edited by hand, or regenerated), the stored hash no longer
+# matches and the pipeline demands re-approval rather than proceeding.
 APPROVAL_FLAG="$ARTIFACTS_DIR/.architect-approved"
-if [ ! -f "$APPROVAL_FLAG" ]; then
+PLAN_HASH=$(plan_hash "$ARTIFACTS_DIR/technical-plan.md")
+DESIGN_APPROVED="false"
+if [ -f "$APPROVAL_FLAG" ]; then
+  APPROVED_HASH=$(head -1 "$APPROVAL_FLAG" 2>/dev/null)
+  if [ "$APPROVED_HASH" = "$PLAN_HASH" ]; then
+    DESIGN_APPROVED="true"
+  else
+    echo "==> Technical plan differs from the approved version — re-approval required."
+  fi
+fi
+
+if [ "$DESIGN_APPROVED" != "true" ]; then
   if [ "$APPROVE_DESIGN" = "true" ]; then
-    echo "==> Design approved via --approve-design."
-    touch "$APPROVAL_FLAG"
+    echo "==> Design approved via --approve-design (plan $PLAN_HASH)."
+    echo "$PLAN_HASH" > "$APPROVAL_FLAG"
     commit_stage "chore(architect): design approved for $SLUG"
   else
     echo ""
