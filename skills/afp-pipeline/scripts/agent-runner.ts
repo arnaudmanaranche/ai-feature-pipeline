@@ -1183,6 +1183,12 @@ async function callOpenRouter(
 
     if (response.ok) {
       const data = await response.json();
+      if (data.usage) {
+        console.log(`  Usage: ${JSON.stringify(data.usage)}`);
+      }
+      if (data.choices?.[0]?.finish_reason) {
+        console.log(`  Finish reason: ${data.choices[0].finish_reason}`);
+      }
       const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
       const argsRaw = toolCall?.function?.arguments;
       if (!argsRaw) {
