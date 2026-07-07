@@ -16,6 +16,7 @@ import {
 } from 'fs';
 import { join, dirname, resolve, sep } from 'path';
 import { pathToFileURL } from 'url';
+import { createHash } from 'crypto';
 
 // Project root: default to cwd, override with --project-root.
 // Resolved lazily (not cached) so tests can chdir() into a fixture root.
@@ -1790,6 +1791,13 @@ async function main() {
   // 2. Load skill prompt
   const skillContent = read(config.skill);
 
+  // Provenance: which prompt version drove this agent. A short content hash
+  // of the role's skill prompt — recorded in the status file so the commit
+  // for this stage can carry `AFP-Model` / `AFP-Prompt-SHA` trailers. That
+  // makes each stage's output reproducible/auditable ("which model and
+  // which prompt produced this?") without diffing prose.
+  const promptSha = createHash('sha256').update(skillContent).digest('hex').slice(0, 12);
+
   // 3. Build prompts
   console.log('  Building prompts...');
   const systemPrompt = buildSystemPrompt(role, skillContent);
@@ -1848,6 +1856,8 @@ async function main() {
     verdict: verdict || 'none',
     files: files.length,
     artifacts: artifacts.length,
+    model: config.model,
+    promptSha,
   };
   write(statusFlagPath, JSON.stringify(statusData, null, 2));
   write(roleStatusFlagPath, JSON.stringify(statusData, null, 2));
@@ -1858,6 +1868,8 @@ async function main() {
     role,
     slug,
     verdict: verdict || 'none',
+    model: config.model,
+    promptSha,
     files: files.map(f => ({ path: f.path, action: f.action })),
     artifacts: artifacts.map(a => ({ path: a.path, action: a.action })),
   };

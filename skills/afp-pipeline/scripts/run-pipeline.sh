@@ -152,6 +152,20 @@ run_agent() {
 # silently continuing with unstaged/uncommitted agent output.
 commit_stage() {
   local message="$1"
+  local role="${2:-}"
+  # Provenance trailers: when a role is given, stamp the model and prompt
+  # hash that produced this stage's output into the commit body (read from
+  # the role's status file agent-runner just wrote). Trailers sit in the
+  # body, so the conventional-commit header still satisfies commitlint.
+  if [ -n "$role" ] && [ -f "$ARTIFACTS_DIR/.agent-status-$role.json" ]; then
+    local prov
+    prov=$(node -e "try{var s=JSON.parse(require('fs').readFileSync('$ARTIFACTS_DIR/.agent-status-$role.json','utf-8'));var o=[];if(s.model)o.push('AFP-Model: '+s.model);if(s.promptSha)o.push('AFP-Prompt-SHA: '+s.promptSha);process.stdout.write(o.join('\n'))}catch(e){}" 2>/dev/null)
+    if [ -n "$prov" ]; then
+      message="$message
+
+$prov"
+    fi
+  fi
   git add -A
   if git diff --cached --quiet; then
     return 0
@@ -339,7 +353,7 @@ run_memory_compact_if_due() {
     echo ""
     echo "==> $count features shipped — compacting .ai/project-memory.md..."
     run_agent memory-compact
-    commit_stage "chore(memory-compact): after $count features"
+    commit_stage "chore(memory-compact): after $count features" memory-compact
   fi
 }
 
@@ -380,13 +394,13 @@ fi
 
 # 1. PM writes feature brief
 run_agent pm
-commit_stage "chore(pm): $SLUG"
+commit_stage "chore(pm): $SLUG" pm
 
 # 2. Dev review + clarification loop
 loop=0
 while [ $loop -lt $MAX_LOOPS ]; do
   run_agent dev-review
-  commit_stage "chore(dev-review): $SLUG"
+  commit_stage "chore(dev-review): $SLUG" dev-review
 
   VERDICT=$(read_verdict)
 
@@ -402,7 +416,7 @@ while [ $loop -lt $MAX_LOOPS ]; do
     echo ""
     echo "  Dev has questions. Running PM respond..."
     run_agent pm-respond
-    commit_stage "chore(pm-respond): $SLUG"
+    commit_stage "chore(pm-respond): $SLUG" pm-respond
     loop=$((loop + 1))
     continue
   fi
@@ -454,7 +468,7 @@ else
     run_agent architect
   done
 
-  commit_stage "chore(architect): $SLUG"
+  commit_stage "chore(architect): $SLUG" architect
 fi
 
 # --- Design gate ---
@@ -512,7 +526,7 @@ TC_ATTEMPT=1
 while true; do
   if run_quality_gates; then
     echo "  Typecheck/lint/tests passed (attempt $TC_ATTEMPT). Committing..."
-    commit_stage "chore(dev): $SLUG"
+    commit_stage "chore(dev): $SLUG" dev
     break
   fi
 
@@ -560,7 +574,7 @@ fi
 REVIEW_ATTEMPT=1
 while true; do
   run_agent review
-  commit_stage "chore(review): $SLUG"
+  commit_stage "chore(review): $SLUG" review
 
   REVIEW_VERDICT=$(read_verdict review)
   if [ "$REVIEW_VERDICT" != "FAIL" ]; then
@@ -585,13 +599,13 @@ while true; do
     echo "  Worktree preserved for inspection: $PIPELINE_ROOT"
     exit 1
   fi
-  commit_stage "chore(dev): $SLUG (review fix)"
+  commit_stage "chore(dev): $SLUG (review fix)" dev
   REVIEW_ATTEMPT=$((REVIEW_ATTEMPT + 1))
 done
 
 # 6. QA
 run_agent qa
-commit_stage "chore(qa): $SLUG"
+commit_stage "chore(qa): $SLUG" qa
 
 QA_VERDICT=$(read_verdict qa)
 if [ "$QA_VERDICT" = "FAIL" ]; then
@@ -601,7 +615,7 @@ if [ "$QA_VERDICT" = "FAIL" ]; then
   # Run retro so learnings are captured, but skip PR creation
   run_agent retro
   FEATURE_COUNT=$(bump_memory_compact_counter)
-  commit_stage "chore(retro): $SLUG"
+  commit_stage "chore(retro): $SLUG" retro
   run_memory_compact_if_due "$FEATURE_COUNT"
 notify_skill_proposals
   if [ "$DRY_RUN" != "--dry-run" ]; then
@@ -617,7 +631,7 @@ fi
 # 7. Retrospective — compile session learnings
 run_agent retro
 FEATURE_COUNT=$(bump_memory_compact_counter)
-commit_stage "chore(retro): $SLUG"
+commit_stage "chore(retro): $SLUG" retro
 run_memory_compact_if_due "$FEATURE_COUNT"
 notify_skill_proposals
 
