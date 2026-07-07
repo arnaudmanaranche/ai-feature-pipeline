@@ -165,19 +165,82 @@ commit_stage() {
   fi
 }
 
+# Source files Dev created or modified in the worktree but hasn't committed
+# yet (unstaged edits to tracked files + brand-new untracked files),
+# restricted to source extensions. Used by the content gates below so they
+# only judge what Dev actually wrote this pass, never pre-existing repo code.
+get_changed_source_files() {
+  { git diff --name-only 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } \
+    | grep -Ei '\.(ts|tsx|js|jsx|css|json)$' | sort -u
+}
+
+# Deterministic content gates on Dev's own output. GOVERNANCE.md forbids
+# placeholders and committed secrets, but those were previously prompt-only
+# rules a drifting model could ignore — a truncated file ending in
+# "// ... rest stays the same" still passes typecheck if the rest compiles.
+# These make both rules real, code-enforced gates that feed the same Dev
+# retry loop as typecheck/lint. Dependency-free (no gitleaks required);
+# projects wanting deeper scanning can add it to their own pre-commit hook,
+# which the pipeline already respects.
+scan_content_gates() {
+  local out="$1" # append findings here
+  local placeholder_re secret_re files f hits ok=0
+  # Placeholder / truncation markers the Dev must never leave in output.
+  placeholder_re='(//[[:space:]]*(TODO|FIXME)|//[[:space:]]*\.\.\.|/\*[[:space:]]*\.\.\.|\.\.\.[[:space:]]*(rest|the rest)|rest stays the same|rest of the (code|file|implementation)|\bTBD\b|implementation (goes|here))'
+  # Conservative secret signatures (private keys, cloud/provider tokens, and
+  # assigned credential literals with a non-trivial value).
+  secret_re='(-----BEGIN[A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|\bsk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]{10,}|(api[_-]?key|secret|token|password|passwd|access[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{12,}["'"'"'])'
+
+  files=$(get_changed_source_files)
+  [ -z "$files" ] && return 0
+
+  local ph_hits sec_hits
+  ph_hits=$(printf '%s\n' "$files" | while IFS= read -r f; do
+    [ -f "$f" ] && grep -HniE "$placeholder_re" "$f" 2>/dev/null
+  done)
+  sec_hits=$(printf '%s\n' "$files" | while IFS= read -r f; do
+    [ -f "$f" ] && grep -HnE "$secret_re" "$f" 2>/dev/null
+  done)
+
+  if [ -n "$ph_hits" ]; then
+    ok=1
+    {
+      echo "## Forbidden placeholders / truncated output"
+      echo "GOVERNANCE.md forbids placeholders and partial snippets. Emit the COMPLETE content of each file. Offending lines:"
+      echo '```'
+      printf '%s\n' "$ph_hits"
+      echo '```'
+      echo ""
+    } >> "$out"
+  fi
+  if [ -n "$sec_hits" ]; then
+    ok=1
+    {
+      echo "## Possible committed secrets"
+      echo "GOVERNANCE.md forbids committing secrets/credentials. Remove them and load from the environment instead. Offending lines:"
+      echo '```'
+      printf '%s\n' "$sec_hits"
+      echo '```'
+      echo ""
+    } >> "$out"
+  fi
+  return $ok
+}
+
 # Quality gates run after every Dev pass: typecheck (always), lint (always —
 # `commands.lint` was configured but never actually invoked anywhere before
-# this), and the project's own test suite (only if `commands.test` is
+# this), the project's own test suite (only if `commands.test` is
 # configured — not every project has one runnable command, so this is
-# opt-in rather than defaulting to a guess). All failures are combined into
-# a single feedback file for the Dev retry rather than three separate ones.
+# opt-in rather than defaulting to a guess), and deterministic content gates
+# (no placeholders, no committed secrets in Dev's output). All failures are
+# combined into a single feedback file for the Dev retry rather than several.
 run_quality_gates() {
   local feedback_file="$ARTIFACTS_DIR/.agent-typecheck-feedback.md"
   local tc_out lint_out test_out
   tc_out=$(mktemp)
   lint_out=$(mktemp)
   test_out=$(mktemp)
-  local tc_ok=true lint_ok=true test_ok=true
+  local tc_ok=true lint_ok=true test_ok=true content_ok=true
 
   if ! ${TYPECHECK_CMD} > "$tc_out" 2>&1; then
     tc_ok=false
@@ -191,7 +254,13 @@ run_quality_gates() {
     fi
   fi
 
-  if [ "$tc_ok" = false ] || [ "$lint_ok" = false ] || [ "$test_ok" = false ]; then
+  local content_out
+  content_out=$(mktemp)
+  if ! scan_content_gates "$content_out"; then
+    content_ok=false
+  fi
+
+  if [ "$tc_ok" = false ] || [ "$lint_ok" = false ] || [ "$test_ok" = false ] || [ "$content_ok" = false ]; then
     mkdir -p "$(dirname "$feedback_file")"
     {
       if [ "$tc_ok" = false ]; then
@@ -209,13 +278,16 @@ run_quality_gates() {
         cat "$test_out"
         echo ""
       fi
+      if [ "$content_ok" = false ]; then
+        cat "$content_out"
+      fi
     } > "$feedback_file"
     head -60 "$feedback_file"
-    rm -f "$tc_out" "$lint_out" "$test_out"
+    rm -f "$tc_out" "$lint_out" "$test_out" "$content_out"
     return 1
   fi
 
-  rm -f "$tc_out" "$lint_out" "$test_out"
+  rm -f "$tc_out" "$lint_out" "$test_out" "$content_out"
   rm -f "$feedback_file" 2>/dev/null || true
   return 0
 }
