@@ -94,3 +94,30 @@ inside `run-pipeline.sh`'s loop, instead of a `fetch()` to an HTTP endpoint. Tha
 credential is their Claude subscription keep every safety mechanism built this session, with zero API key.
 Needs research into what Claude Code's CLI actually exposes for scripted/headless invocation before scoping
 further.
+
+## Dev's one-shot "full file content per touched file, in one JSON response" doesn't scale
+
+Found live on a real ~13-file feature (monthly size reminder, little-nook): Dev hit `finish_reason: "length"`
+(truncated mid-JSON) at maxTokens=24000, then *again* at maxTokens=64000 — the second attempt spent the full
+64000 completion tokens and still didn't finish emitting every full file's content inside one submit_changes
+call. This isn't a tuning problem: cranking maxTokens further just runs into (a) the model/provider's actual
+max-output ceiling and (b) real cost — the 64000-token attempt alone cost $1.21, and immediately after it the
+OpenRouter account didn't have enough credit left for another attempt at that size (402: "requested 64000
+tokens, but can only afford 50228").
+
+Current design asks Dev to emit the *complete* content of every touched file (a deliberate anti-hallucination
+choice from early on — diffs invite subtly-wrong context). That's fundamentally at odds with features that
+touch many files: the more files a feature needs, the more likely a single call truncates, and there's no
+graceful degradation — a truncated call just fails schema validation and burns another full-price retry that
+will hit the same ceiling.
+
+Directions worth exploring (not mutually exclusive):
+- Split Dev's work across multiple calls, one per file (or small batch of files) from the technical plan's
+  impacted-files list, instead of one call for everything — bounds each call's output size regardless of
+  total feature size, at the cost of more calls/orchestration complexity in run-pipeline.sh.
+- Detect `finish_reason: "length"` specifically (we already log it) and treat it differently from a generic
+  schema-invalid retry: e.g. ask Dev to continue/complete the truncated file list, or explicitly instruct it
+  to prioritize which files matter most if it can't fit everything.
+- Surface a pre-flight estimate (impacted-file count/size from the technical plan) as a warning before even
+  calling Dev, so a human can decide to split the feature into smaller ones rather than discovering the
+  ceiling via a failed, paid call.
