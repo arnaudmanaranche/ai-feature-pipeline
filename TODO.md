@@ -65,17 +65,12 @@ this fails harmlessly (the pipeline still completes, just without opening anythi
 creation path. Would need a `glab mr create` branch (or GitLab REST API call) gated on detecting the git host
 from the remote URL, mirroring what `detectGithubRepo()` already half-does.
 
-## Provider abstraction — remaining sub-case (Anthropic/Bedrock-shaped and Claude-subscription backends)
+## Provider abstraction — Anthropic/Bedrock-native backends
 
-**Fixed for the OpenAI-compatible case**: `CONFIG.openRouter` was renamed to `CONFIG.llm` with a new `baseUrl`
-field (defaulting to OpenRouter's endpoint for backward compatibility — old `.ai/config.json` files with the
-`openRouter` key are aliased automatically). `callOpenRouter()` now fetches `CONFIG.llm.baseUrl` instead of a
-hardcoded URL, and OpenRouter-only extras (the `HTTP-Referer` header, the `provider` routing field) are only
-sent when the base URL is actually OpenRouter's. This covers OpenAI, Azure OpenAI, Groq, Together, Fireworks,
-and Ollama (local) — they all speak the same request/response shape.
-
-**Still open**: Anthropic's native Messages API and Bedrock use a different shape entirely and would need a
-real adapter, not just a config change — scope that separately if/when needed.
+`agent-runner.ts` now talks to any OpenAI-compatible chat-completions + tool-calling provider via
+`llm.baseUrl`/`llm.apiKeyEnv` (OpenAI, Azure OpenAI, Groq, Together, Fireworks, Ollama). Anthropic's native
+Messages API and Bedrock use a different request/response shape entirely and would need a real adapter, not
+just a config change — scope that separately if/when needed.
 
 ### Distinct sub-case: people with only a Claude subscription, no API key
 
@@ -119,18 +114,3 @@ Directions worth exploring (not mutually exclusive):
 - Surface a pre-flight estimate (impacted-file count/size from the technical plan) as a warning before even
   calling Dev, so a human can decide to split the feature into smaller ones rather than discovering the
   ceiling via a failed, paid call.
-
-## ~~afp-setup's install step ships dev-only files (.test.ts/.test.mjs) into consumer projects~~ — Fixed
-
-Found live: installing the module into little-nook by copying `skills/afp-pipeline` wholesale dragged
-`agent-runner.test.ts` and `rebuild-context.test.mjs` along with it. These use `node:test`/`node:assert` — the
-consumer project's own test runner (Jest, in little-nook's case) never runs them, so they're pure dead weight.
-Worse, they actively caused part of the friction already logged above (the tsconfig-exclude fix): the very
-first typecheck errors traced back to `agent-runner.test.ts`'s `node:test` imports, before the real
-`skills/`/`.ai/` exclusion issue was even identified.
-
-**Fix**: moved both test files out of `skills/afp-pipeline/scripts/` into a top-level `test/` directory
-(alongside the repo's own dev-only `package.json`), which is never part of `skills/afp-pipeline/` and so can't
-be dragged along by a wholesale copy of that directory, regardless of what packaging mechanism does the
-copying. Updated their imports to point back at the scripts under `skills/afp-pipeline/scripts/`, and updated
-`package.json`'s `test` script and the README's dev-tooling description accordingly.
