@@ -1,7 +1,9 @@
 #!/usr/bin/env npx tsx
-// Multi-agent orchestration via OpenRouter — AI Feature Pipeline module
+// Multi-agent orchestration via any OpenAI-compatible chat-completions API
+// (OpenRouter by default) — AI Feature Pipeline module
 // Usage: node scripts/agent-runner.ts --role=<role> --slug=<slug> [--project-root=<path>]
-// Requires: OPENROUTER_API_KEY env var (or configured in .ai/config.json)
+// Requires: OPENROUTER_API_KEY env var, or whatever key is set at llm.apiKeyEnv
+// in .ai/config.json for a non-OpenRouter provider
 
 // dotenv is optional — load via dynamic import so the script works without it
 import { execSync } from 'child_process';
@@ -82,7 +84,13 @@ interface ProjectConfig {
     localeDir: string;
   };
   e2e: { framework: string; dir: string };
-  openRouter: {
+  // Generic OpenAI-compatible chat-completions + tool-calling config.
+  // Covers OpenRouter, OpenAI, Azure OpenAI, Groq, Together, Fireworks, and
+  // Ollama (local) unchanged — they all speak the same request/response
+  // shape. `baseUrl` defaults to OpenRouter's for backward compatibility;
+  // point it elsewhere to swap providers without touching the call site.
+  llm: {
+    baseUrl: string;
     apiKeyEnv: string;
     model: string;
     refererUrl: string;
@@ -92,7 +100,8 @@ interface ProjectConfig {
     // 504 "Upstream idle timeout exceeded" from Amazon Bedrock (one of
     // OpenRouter's upstream providers for this model) on large prompts;
     // `ignore` lets a project route around a specific upstream that's
-    // proving unreliable for it.
+    // proving unreliable for it. Only meaningful when `baseUrl` is
+    // OpenRouter's — harmless to omit for other providers.
     provider?: {
       order?: string[];
       ignore?: string[];
@@ -104,10 +113,22 @@ interface ProjectConfig {
   providerNesting: string[];
 }
 
+const DEFAULT_LLM_BASE_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
 function loadProjectConfig(): ProjectConfig {
   const configPath = join(getRoot(), '.ai/config.json');
   try {
-    return JSON.parse(readFileSync(configPath, 'utf-8'));
+    const parsed = JSON.parse(readFileSync(configPath, 'utf-8'));
+    // Back-compat: older .ai/config.json files use the pre-abstraction
+    // `openRouter` key instead of `llm`. Alias it rather than breaking
+    // every existing install on upgrade.
+    if (!parsed.llm && parsed.openRouter) {
+      parsed.llm = parsed.openRouter;
+    }
+    if (parsed.llm && !parsed.llm.baseUrl) {
+      parsed.llm.baseUrl = DEFAULT_LLM_BASE_URL;
+    }
+    return parsed;
   } catch {
     console.warn(
       `  Warning: config.json not found at ${configPath}, using defaults`
@@ -147,7 +168,8 @@ function loadProjectConfig(): ProjectConfig {
         localeDir: 'i18n/locales',
       },
       e2e: { framework: '', dir: 'e2e' },
-      openRouter: {
+      llm: {
+        baseUrl: DEFAULT_LLM_BASE_URL,
         apiKeyEnv: 'OPENROUTER_API_KEY',
         model: 'openai/gpt-4o',
         refererUrl: 'https://github.com/org/repo',
@@ -1168,7 +1190,7 @@ function parseToolArgs(argsRaw: string, role: string, slug: string): AgentResult
   };
 }
 
-// --- OpenRouter API ---
+// --- LLM API (generic OpenAI-compatible chat-completions + tool-calling) ---
 
 async function callOpenRouter(
   role: string,
@@ -1178,11 +1200,14 @@ async function callOpenRouter(
   userPrompt: string,
   maxTokens: number
 ): Promise<AgentResult> {
-  const apiKey = process.env[CONFIG.openRouter.apiKeyEnv];
+  const apiKey = process.env[CONFIG.llm.apiKeyEnv];
   if (!apiKey) {
-    console.error(`Error: ${CONFIG.openRouter.apiKeyEnv} env var is required`);
+    console.error(`Error: ${CONFIG.llm.apiKeyEnv} env var is required`);
     process.exit(1);
   }
+
+  const baseUrl = CONFIG.llm.baseUrl || DEFAULT_LLM_BASE_URL;
+  const isOpenRouter = baseUrl.includes('openrouter.ai');
 
   const RETRYABLE = new Set([429, 500, 502, 503]);
   const MAX_RETRIES = 3;
@@ -1197,34 +1222,37 @@ async function callOpenRouter(
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     let response: Response;
     try {
-      response = await fetch(
-        'https://openrouter.ai/api/v1/chat/completions',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-            'HTTP-Referer': CONFIG.openRouter.refererUrl,
+      response = await fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          // OpenRouter-specific attribution header — harmless to send only
+          // when actually talking to OpenRouter.
+          ...(isOpenRouter
+            ? { 'HTTP-Referer': CONFIG.llm.refererUrl }
+            : {}),
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          tools: [tool],
+          tool_choice: {
+            type: 'function',
+            function: { name: 'submit_changes' },
           },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt },
-            ],
-            tools: [tool],
-            tool_choice: {
-              type: 'function',
-              function: { name: 'submit_changes' },
-            },
-            max_tokens: maxTokens,
-            temperature: 0.3,
-            ...(CONFIG.openRouter.provider
-              ? { provider: CONFIG.openRouter.provider }
-              : {}),
-          }),
-        }
-      );
+          max_tokens: maxTokens,
+          temperature: 0.3,
+          // OpenRouter-only provider-routing extension — other
+          // OpenAI-compatible providers don't recognize this field.
+          ...(isOpenRouter && CONFIG.llm.provider
+            ? { provider: CONFIG.llm.provider }
+            : {}),
+        }),
+      });
     } catch (err) {
       // fetch() itself can throw on network-level failures (connection
       // reset, read timeout, DNS failure) — found live: a real ETIMEDOUT
@@ -1232,7 +1260,7 @@ async function callOpenRouter(
       // HTTP-level non-ok responses and schema-invalid content were
       // handled as retryable. A network hiccup deserves the same backoff
       // retry as a 502/503, not a hard crash.
-      lastError = `Network error calling OpenRouter: ${err instanceof Error ? err.message : String(err)}`;
+      lastError = `Network error calling the LLM API: ${err instanceof Error ? err.message : String(err)}`;
       if (attempt < MAX_RETRIES) {
         const delay = BASE_DELAY * Math.pow(2, attempt - 1);
         console.warn(
@@ -1242,7 +1270,7 @@ async function callOpenRouter(
         continue;
       }
       console.error(
-        `OpenRouter call failed after ${MAX_RETRIES} attempts due to network errors: ${lastError}`
+        `LLM API call failed after ${MAX_RETRIES} attempts due to network errors: ${lastError}`
       );
       process.exit(1);
     }
@@ -1261,7 +1289,7 @@ async function callOpenRouter(
       const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
       const argsRaw = toolCall?.function?.arguments;
       if (!argsRaw) {
-        console.error('OpenRouter returned no submit_changes tool call');
+        console.error('LLM API returned no submit_changes tool call');
         console.error(JSON.stringify(data, null, 2));
         process.exit(1);
       }
@@ -1285,7 +1313,7 @@ async function callOpenRouter(
           continue;
         }
         console.error(
-          `OpenRouter kept returning schema-invalid submit_changes arguments after ${MAX_RETRIES} attempts: missing ${missing.join(', ')}`
+          `LLM API kept returning schema-invalid submit_changes arguments after ${MAX_RETRIES} attempts: missing ${missing.join(', ')}`
         );
         console.error(argsRaw);
         process.exit(1);
@@ -1303,16 +1331,16 @@ async function callOpenRouter(
     if (RETRYABLE.has(response.status) && attempt < MAX_RETRIES) {
       const delay = BASE_DELAY * Math.pow(2, attempt - 1);
       console.warn(
-        `  OpenRouter error (${response.status}), retrying in ${delay}ms (attempt ${attempt}/${MAX_RETRIES})...`
+        `  LLM API error (${response.status}), retrying in ${delay}ms (attempt ${attempt}/${MAX_RETRIES})...`
       );
       await new Promise(r => setTimeout(r, delay));
     } else {
-      console.error(`OpenRouter API error (${response.status}): ${lastError}`);
+      console.error(`LLM API error (${response.status}): ${lastError}`);
       process.exit(1);
     }
   }
 
-  console.error(`OpenRouter API error (exhausted retries): ${lastError}`);
+  console.error(`LLM API error (exhausted retries): ${lastError}`);
   process.exit(1);
 }
 
@@ -1767,14 +1795,14 @@ async function main() {
   const systemPrompt = buildSystemPrompt(role, skillContent);
   const userPrompt = buildUserPrompt(role, slug, ctx, config);
 
-  // 4. Call OpenRouter (or use mock for dry-run) — output is already
+  // 4. Call the LLM API (or use mock for dry-run) — output is already
   // schema-validated JSON from the submit_changes tool call, no parsing step.
   let result: AgentResult;
   if (isDryRun) {
     console.log('  DRY RUN — using mock response');
     result = mockResponse(role, slug);
   } else {
-    console.log('  Calling OpenRouter...');
+    console.log('  Calling the LLM API...');
     result = await callOpenRouter(
       role,
       slug,

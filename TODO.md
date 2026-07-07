@@ -65,19 +65,17 @@ this fails harmlessly (the pipeline still completes, just without opening anythi
 creation path. Would need a `glab mr create` branch (or GitLab REST API call) gated on detecting the git host
 from the remote URL, mirroring what `detectGithubRepo()` already half-does.
 
-## Provider abstraction — agent-runner.ts is hardcoded to OpenRouter
+## Provider abstraction — remaining sub-case (Anthropic/Bedrock-shaped and Claude-subscription backends)
 
-`callOpenRouter()` hardcodes `https://openrouter.ai/api/v1/chat/completions` and the `OPENROUTER_API_KEY` env
-var name. The per-role model choice (`agents.json`) is independent of this and would survive a provider swap
-unchanged — but not everyone wants a dependency on OpenRouter specifically (direct provider billing/compliance,
-or just not wanting a proxy in the path).
+**Fixed for the OpenAI-compatible case**: `CONFIG.openRouter` was renamed to `CONFIG.llm` with a new `baseUrl`
+field (defaulting to OpenRouter's endpoint for backward compatibility — old `.ai/config.json` files with the
+`openRouter` key are aliased automatically). `callOpenRouter()` now fetches `CONFIG.llm.baseUrl` instead of a
+hardcoded URL, and OpenRouter-only extras (the `HTTP-Referer` header, the `provider` routing field) are only
+sent when the base URL is actually OpenRouter's. This covers OpenAI, Azure OpenAI, Groq, Together, Fireworks,
+and Ollama (local) — they all speak the same request/response shape.
 
-OpenRouter, OpenAI, Azure OpenAI, Groq, Together, Fireworks, and Ollama (local) all speak the same
-OpenAI-compatible chat-completions + tool-calling dialect — generalizing `openRouter.baseUrl` +
-`openRouter.apiKeyEnv` (rename conceptually to `llm.baseUrl`/`llm.apiKeyEnv`) covers all of them with no
-request/response shape changes, defaulting to OpenRouter for backward compatibility. Anthropic's native
-Messages API and Bedrock use a different shape entirely and would need a real adapter, not just a config
-change — scope that separately if/when needed.
+**Still open**: Anthropic's native Messages API and Bedrock use a different shape entirely and would need a
+real adapter, not just a config change — scope that separately if/when needed.
 
 ### Distinct sub-case: people with only a Claude subscription, no API key
 
