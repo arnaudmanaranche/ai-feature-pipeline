@@ -1189,6 +1189,9 @@ async function callOpenRouter(
       if (data.choices?.[0]?.finish_reason) {
         console.log(`  Finish reason: ${data.choices[0].finish_reason}`);
       }
+      if (data.choices?.[0]?.finish_reason === 'error' || data.error) {
+        console.log(`  Full response on error finish_reason: ${JSON.stringify(data)}`);
+      }
       const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
       const argsRaw = toolCall?.function?.arguments;
       if (!argsRaw) {
