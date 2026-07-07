@@ -28,6 +28,7 @@ import {
   REQUIRED_ROLES,
   normalizeArtifactPath,
   missingRequiredFields,
+  trimContextForPrompt,
 } from './agent-runner.ts';
 
 describe('buildToolSchema', () => {
@@ -558,5 +559,37 @@ describe('missingRequiredFields — enforcing the schema client-side', () => {
       missingRequiredFields({ artifacts: [], verdict: 'PASS' }, 'review'),
       []
     );
+  });
+});
+
+describe('trimContextForPrompt — keeping the Architect prompt small', () => {
+  test('strips cache-only fields, keeps architecturally useful ones', () => {
+    const ctx = JSON.stringify({
+      schemaVersion: 2,
+      architectureMap: { 'a.ts': ['src/a.ts'] },
+      apiMap: { 'src/a.ts': ['foo'] },
+      dependencyMap: { './a': ['src/b.ts'] },
+      symbolIndex: { foo: { definitionPath: 'src/a.ts', type: 'function' } },
+      conventions: { naming: ['camelCase'] },
+      fileCount: 1,
+      perFileExports: { 'src/a.ts': [{ name: 'foo', type: 'function' }] },
+      perFileImports: { 'src/a.ts': [] },
+      fileFingerprints: { 'src/a.ts': 123456 },
+      stats: { filesReusedFromCache: 0, filesParsed: 1 },
+    });
+    const trimmed = JSON.parse(trimContextForPrompt(ctx));
+    assert.ok(trimmed.architectureMap);
+    assert.ok(trimmed.apiMap);
+    assert.ok(trimmed.dependencyMap);
+    assert.ok(trimmed.symbolIndex);
+    assert.ok(trimmed.conventions);
+    assert.equal(trimmed.perFileExports, undefined);
+    assert.equal(trimmed.perFileImports, undefined);
+    assert.equal(trimmed.fileFingerprints, undefined);
+    assert.equal(trimmed.stats, undefined);
+  });
+
+  test('malformed JSON is passed through unchanged rather than throwing', () => {
+    assert.equal(trimContextForPrompt('not json'), 'not json');
   });
 });

@@ -441,6 +441,28 @@ const E2E_FLOW_PATTERNS: Record<string, string[]> = {
   webdriverio: ['.e2e.ts', '.e2e.js'],
 };
 
+// perFileExports/perFileImports/fileFingerprints/stats exist purely to
+// support rebuild-context.mjs's own incremental cache between runs — the
+// model never needs them, and on a real ~46-file project they added ~16KB
+// (roughly a third) of the Architect's prompt for zero architectural
+// value. Found live: a large combined prompt (this + directory tree +
+// templates + a detailed feature brief) pushed past ~90k chars and
+// triggered a genuine upstream provider timeout (OpenRouter -> Bedrock,
+// 504 "Upstream idle timeout exceeded") on every attempt — not something a
+// retry could fix, since the cause doesn't change between attempts.
+function trimContextForPrompt(ctxData: string): string {
+  try {
+    const parsed = JSON.parse(ctxData);
+    delete parsed.perFileExports;
+    delete parsed.perFileImports;
+    delete parsed.fileFingerprints;
+    delete parsed.stats;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return ctxData; // malformed JSON — send as-is rather than fail
+  }
+}
+
 function buildUserPrompt(
   role: string,
   slug: string,
@@ -569,7 +591,9 @@ function buildUserPrompt(
   if (role === 'architect') {
     const ctxData = read('.ai/context.json');
     if (ctxData && !ctxData.startsWith('[file not found')) {
-      sections.push(`## Architecture maps\n\n\`\`\`json\n${ctxData}\n\`\`\``);
+      sections.push(
+        `## Architecture maps\n\n\`\`\`json\n${trimContextForPrompt(ctxData)}\n\`\`\``
+      );
     }
     const techTmpl = read('skills/afp-pipeline/templates/technical-plan.md');
     if (techTmpl && !techTmpl.startsWith('[file not found')) {
@@ -1816,5 +1840,6 @@ export {
   REQUIRED_ROLES,
   normalizeArtifactPath,
   missingRequiredFields,
+  trimContextForPrompt,
 };
 export type { FileChange, ArtifactChange, AgentResult, TokenUsage };
