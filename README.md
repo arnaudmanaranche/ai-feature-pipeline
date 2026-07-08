@@ -184,7 +184,7 @@ Each role in `.ai/agents.json` picks its own model, called through any OpenAI-co
 OPENROUTER_MODEL_DEV=anthropic/claude-opus-4.6 bash skills/afp-pipeline/scripts/run-pipeline.sh my-feature
 ```
 
-The env var name is `OPENROUTER_MODEL_<ROLE>` with the role's hyphens replaced by underscores (`dev-review` → `OPENROUTER_MODEL_DEV_REVIEW`).
+The env var name is `OPENROUTER_MODEL_<ROLE>` with the role's hyphens replaced by underscores (`dev-review` → `OPENROUTER_MODEL_DEV_REVIEW`). The same convention applies to `AFP_SKILL_<ROLE>`, which points a role at an alternate prompt file for A/B experiments (see **Self-improvement loop** below) — e.g. `AFP_SKILL_PM=.ai/experiments/pm-v2.md`.
 
 ### Customizing the Dev agent per file type or language
 
@@ -267,6 +267,29 @@ Two layers, both dependency-free:
 
 Golden cases point at checked-in fixture artifacts, so `npm run eval` is a self-contained regression run that also executes in CI.
 
+### Self-improvement loop (prompt A/B, provenance-keyed)
+
+The eval harness plus provenance trailers close a measurable loop for improving the pipeline's own prompts — without an autonomous agent silently rewriting itself. The deployment step stays human-gated; what's automated is the *measurement*.
+
+1. **Vary a prompt** without touching `agents.json`: point a role at an alternate prompt file via `AFP_SKILL_<ROLE>` (hyphens → underscores). The prompt hash recorded in provenance is computed from whatever file actually ran, so the experiment is auditable.
+   ```bash
+   AFP_SKILL_PM=.ai/experiments/pm-v2.md bash skills/afp-pipeline/scripts/run-pipeline.sh my-feature
+   ```
+2. **A/B the output** of the baseline run against the candidate run, scored by the same rubric. A candidate "regresses" if its overall score drops **or** any previously-passing check now fails (so a change that fixes one thing while quietly breaking another is still caught). Exit code is non-zero on regression, and each side reports its prompt provenance (`role@<sha>`):
+   ```bash
+   node .../eval-pipeline.mjs --case=settings-toggle \
+     --dir=.ai/artifacts/features/baseline-run \
+     --compare=.ai/artifacts/features/candidate-run
+   # candidate 88%  [architect@bbb222]  ▼ -13pt
+   #   - regressed:  technical-plan.md:contains:```mermaid
+   ```
+3. **Track score over time** per prompt version with an append-only history log:
+   ```bash
+   node .../eval-pipeline.mjs --case=settings-toggle --dir=<run> --record=eval-history.jsonl --label="pm-v2"
+   ```
+
+Keep the winning prompt (promote the variant file into `agents.json`) or discard it — the decision is yours, but it's now backed by a number and traceable to an exact prompt hash. The natural next rung — automatically *generating* candidate prompts and selecting by eval (DSPy-style) — fits the same loop, and would still land behind the same human gate before any prompt ships.
+
 ## Development
 
 This repo itself has dev-only tooling (`package.json`, `test/`, not published, not installed by consumers) to unit-test the pipeline's scripts:
@@ -276,7 +299,7 @@ npm install
 npm test
 ```
 
-Tests cover `agent-runner.ts` (schema shape, per-role write permissions, dry-run write behavior), `rebuild-context.mjs` (AST vs regex export/import extraction, incremental cache hit/miss/deletion), and `eval-pipeline.mjs` (rubric scoring passes a good artifact set and fails a degraded one, plus every shipped golden case actually meets its threshold). `.github/workflows/test.yml` runs `npm test` and `npm run eval` on every push and PR to `main`, so a change that breaks a test, degrades a golden case, or introduces an untested behavior change is caught before merge rather than relying on someone remembering to run it locally.
+Tests cover `agent-runner.ts` (schema shape, per-role write permissions, dry-run write behavior), `rebuild-context.mjs` (AST vs regex export/import extraction, incremental cache hit/miss/deletion), and `eval-pipeline.mjs` (rubric scoring passes a good artifact set and fails a degraded one, A/B comparison flags a regression even when the net score is unchanged, plus every shipped golden case actually meets its threshold). `.github/workflows/test.yml` runs `npm test` and `npm run eval` on every push and PR to `main`, so a change that breaks a test, degrades a golden case, or introduces an untested behavior change is caught before merge rather than relying on someone remembering to run it locally.
 
 ## Versioning
 

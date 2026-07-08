@@ -1798,8 +1798,28 @@ async function main() {
     }
   }
 
-  // 2. Load skill prompt
-  const skillContent = read(config.skill);
+  // 2. Load skill prompt.
+  //
+  // AFP_SKILL_<ROLE> lets you run a role with an ALTERNATE prompt file
+  // without editing agents.json — the knob for A/B-testing a prompt change
+  // (e.g. AFP_SKILL_PM=.ai/experiments/pm-v2.md). The prompt hash recorded
+  // in provenance is computed from whatever file is actually used, so an
+  // experiment's output is auditable and comparable via the eval harness.
+  const skillEnvKey = `AFP_SKILL_${role.toUpperCase().replace(/-/g, '_')}`;
+  const skillOverride = (process.env as Record<string, string | undefined>)[
+    skillEnvKey
+  ];
+  const skillPath = skillOverride || config.skill;
+  const skillContent = read(skillPath);
+  if (skillOverride) {
+    if (skillContent.startsWith('[file not found')) {
+      console.warn(
+        `  ⚠️  ${skillEnvKey}=${skillOverride} not found or outside project root — falling back would be silent, aborting.`
+      );
+      process.exit(1);
+    }
+    console.log(`  Prompt override: ${skillEnvKey}=${skillPath}`);
+  }
 
   // Provenance: which prompt version drove this agent. A short content hash
   // of the role's skill prompt — recorded in the status file so the commit

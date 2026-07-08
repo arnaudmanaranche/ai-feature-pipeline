@@ -26,8 +26,15 @@
 //   node eval-pipeline.mjs --case=<name> --dir=<produced-artifacts-dir>
 //   node eval-pipeline.mjs --llm-judge          # also run the LLM judge
 //   node eval-pipeline.mjs --cases=<dir>        # override cases directory
+//   node eval-pipeline.mjs --case=<name> --dir=<baseline> --compare=<candidate>
+//                                               # A/B two runs; exit 1 if the
+//                                               # candidate regresses. Prints
+//                                               # each side's prompt provenance.
+//   node eval-pipeline.mjs --case=<name> --dir=<run> --record=<file> [--label=<s>]
+//                                               # append a JSONL history line
+//                                               # (score keyed by prompt hash)
 
-import { readFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync, appendFileSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -87,6 +94,59 @@ export function scoreCase(caseDef, readArtifact) {
     passed: score >= threshold,
     results,
   };
+}
+
+// Compare a candidate score against a baseline. A change "regresses" if the
+// overall score drops OR any individual check that used to pass now fails —
+// so a prompt tweak that fixes one thing while quietly breaking another is
+// still caught, not hidden by an unchanged net score.
+export function compareScores(baseline, candidate) {
+  const key = r => `${r.artifact}:${r.type}:${r.value}`;
+  const baseMap = new Map(baseline.results.map(r => [key(r), r.ok]));
+  const regressions = [];
+  const fixes = [];
+  for (const r of candidate.results) {
+    const before = baseMap.get(key(r));
+    if (before === true && !r.ok) regressions.push(key(r));
+    if (before === false && r.ok) fixes.push(key(r));
+  }
+  const delta = candidate.score - baseline.score;
+  return {
+    scoreBaseline: baseline.score,
+    scoreCandidate: candidate.score,
+    delta,
+    regressions,
+    fixes,
+    regressed: delta < 0 || regressions.length > 0,
+  };
+}
+
+// Provenance recorded by agent-runner into a produced feature directory:
+// which model + prompt hash produced each role's output. Lets an eval report
+// say exactly which prompt version it is scoring. Returns {} for fixture
+// directories that have no status files.
+export function readProvenance(baseDir) {
+  if (!existsSync(baseDir)) return {};
+  const prov = {};
+  for (const f of readdirSync(baseDir)) {
+    const m = f.match(/^\.agent-status-(.+)\.json$/);
+    if (!m) continue;
+    try {
+      const s = JSON.parse(readFileSync(join(baseDir, f), 'utf-8'));
+      prov[m[1]] = { model: s.model, promptSha: s.promptSha };
+    } catch {
+      /* ignore unreadable status file */
+    }
+  }
+  return prov;
+}
+
+function formatProvenance(prov) {
+  const entries = Object.entries(prov).filter(([, v]) => v.promptSha);
+  if (entries.length === 0) return '';
+  return entries
+    .map(([role, v]) => `${role}@${v.promptSha}`)
+    .join(' ');
 }
 
 // --- Disk / CLI plumbing ---
@@ -188,10 +248,34 @@ async function main() {
       : resolve(EVAL_ROOT, caseDef.artifactsDir);
     const readArtifact = readArtifactFrom(baseDir);
     const scored = scoreCase(caseDef, readArtifact);
+
+    // --- A/B mode: baseline (baseDir) vs candidate (--compare dir) ---
+    if (args.compare) {
+      const candDir = resolve(args.compare);
+      const cand = scoreCase(caseDef, readArtifactFrom(candDir));
+      const cmp = compareScores(scored, cand);
+      const baseProv = formatProvenance(readProvenance(baseDir));
+      const candProv = formatProvenance(readProvenance(candDir));
+      const arrow = cmp.delta > 0 ? '▲' : cmp.delta < 0 ? '▼' : '=';
+      const mark = cmp.regressed ? '❌ REGRESSED' : '✅ OK';
+      console.log(`${mark}  ${caseDef.name}`);
+      console.log(
+        `        baseline  ${(cmp.scoreBaseline * 100).toFixed(0)}%${baseProv ? `  [${baseProv}]` : ''}`
+      );
+      console.log(
+        `        candidate ${(cmp.scoreCandidate * 100).toFixed(0)}%${candProv ? `  [${candProv}]` : ''}  ${arrow} ${(cmp.delta * 100).toFixed(0)}pt`
+      );
+      for (const f of cmp.fixes) console.log(`        + fixed:      ${f}`);
+      for (const r of cmp.regressions) console.log(`        - regressed:  ${r}`);
+      if (cmp.regressed) anyFail = true;
+      continue;
+    }
+
     const pct = (scored.score * 100).toFixed(0);
     const mark = scored.passed ? '✅ PASS' : '❌ FAIL';
+    const prov = formatProvenance(readProvenance(baseDir));
     console.log(
-      `${mark}  ${scored.name}  ${pct}% (threshold ${(scored.threshold * 100).toFixed(0)}%)`
+      `${mark}  ${scored.name}  ${pct}% (threshold ${(scored.threshold * 100).toFixed(0)}%)${prov ? `  [${prov}]` : ''}`
     );
     for (const r of scored.results.filter(r => !r.ok)) {
       console.log(
@@ -207,15 +291,29 @@ async function main() {
         }
       }
     }
+    // --record appends a JSONL history line keyed by prompt provenance, so
+    // score-over-time per prompt version is queryable.
+    if (args.record) {
+      const line =
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          case: scored.name,
+          score: scored.score,
+          passed: scored.passed,
+          label: typeof args.label === 'string' ? args.label : undefined,
+          provenance: readProvenance(baseDir),
+        }) + '\n';
+      appendFileSync(resolve(args.record), line);
+    }
     if (!scored.passed) anyFail = true;
   }
 
   console.log('');
   if (anyFail) {
-    console.error('Eval regressions detected.');
+    console.error(args.compare ? 'Candidate regressed vs baseline.' : 'Eval regressions detected.');
     process.exit(1);
   }
-  console.log('All eval cases passed.');
+  console.log(args.compare ? 'No regressions.' : 'All eval cases passed.');
 }
 
 // Run only when invoked directly (not when imported by the test file).

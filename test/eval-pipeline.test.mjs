@@ -15,6 +15,7 @@ import {
   scoreCase,
   loadCases,
   readArtifactFrom,
+  compareScores,
 } from '../skills/afp-pipeline/scripts/eval-pipeline.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -77,6 +78,44 @@ describe('scoreCase — aggregate scoring', () => {
     const planResult = r.results.find(x => x.artifact === 'plan.md');
     assert.equal(planResult.ok, false);
     assert.equal(planResult.missing, true);
+  });
+});
+
+describe('compareScores — A/B baseline vs candidate', () => {
+  const caseDef = {
+    name: 'demo',
+    threshold: 1.0,
+    checks: [
+      { artifact: 'a.md', type: 'contains', value: 'x' },
+      { artifact: 'a.md', type: 'contains', value: 'y' },
+    ],
+  };
+  const score = (hasX, hasY) =>
+    scoreCase(caseDef, () => `${hasX ? 'x' : ''} ${hasY ? 'y' : ''}`);
+
+  test('a strictly better candidate is not a regression, and reports the fix', () => {
+    const cmp = compareScores(score(true, false), score(true, true));
+    assert.equal(cmp.regressed, false);
+    assert.ok(cmp.delta > 0);
+    assert.deepEqual(cmp.fixes, ['a.md:contains:y']);
+    assert.deepEqual(cmp.regressions, []);
+  });
+
+  test('a lower overall score is a regression', () => {
+    const cmp = compareScores(score(true, true), score(true, false));
+    assert.equal(cmp.regressed, true);
+    assert.ok(cmp.delta < 0);
+    assert.deepEqual(cmp.regressions, ['a.md:contains:y']);
+  });
+
+  test('same net score but a swapped check still counts as a regression', () => {
+    // baseline passes x, fails y; candidate passes y, fails x — score is
+    // identical (50%) but a previously-passing check now fails.
+    const cmp = compareScores(score(true, false), score(false, true));
+    assert.equal(cmp.delta, 0);
+    assert.equal(cmp.regressed, true);
+    assert.deepEqual(cmp.regressions, ['a.md:contains:x']);
+    assert.deepEqual(cmp.fixes, ['a.md:contains:y']);
   });
 });
 
