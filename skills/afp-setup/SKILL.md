@@ -17,6 +17,7 @@ Run this skill when you first install the module in a project. It auto-detects t
 9. Copies `skills/afp-pipeline/templates/scripts/new-feature.sh` into `.ai/scripts/new-feature.sh` and makes it executable (`chmod +x`) — `run-pipeline.sh` depends on this script to scaffold new feature folders
 10. Copies `skills/afp-pipeline/templates/ai-gitignore` into `.ai/.gitignore` — keeps derived (`context.json`) and per-run debug files (`.agent-*` dumps) out of git history so the repo doesn't grow unbounded, while keeping durable knowledge (briefs, plans, reviews, retros, `project-memory.md`, the memory-compact counter, the `.architect-approved` hash) tracked. **Do not overwrite an existing `.ai/.gitignore` that has project-specific additions — merge instead.**
 11. Copies `skills/afp-pipeline/templates/scripts/prune-artifacts.sh` into `.ai/scripts/prune-artifacts.sh` and makes it executable (`chmod +x`) — a human-run maintenance tool for repo hygiene (see **Repo hygiene** below)
+12. Runs the target project's own `format_write_cmd` scoped to `skills/` and `.ai/`, and appends `skills/`/`.ai/` to every lint/format/typecheck exclude mechanism the target project has (see **Excluding module content from the target's tooling** below) — otherwise the module's own copied-in files can fail the target's pre-commit hooks or typecheck gate on the very first commit, for reasons that have nothing to do with the target project itself
 
 ## Auto-detection
 
@@ -144,6 +145,32 @@ The `dev` role entry additionally supports two optional fields for injecting fil
 ## Configuration variables
 
 See `assets/module.yaml` for the full list of configurable values and their defaults.
+
+## Excluding module content from the target's tooling
+
+The module copies its own prompt/registry/config files and TypeScript scripts (`agent-runner.ts`, `run-pipeline.sh`, `detect-stack.mjs`, etc.) into `skills/` and `.ai/` inside the target project. Left alone, this breaks two ways — found live-testing on a real Expo/React Native project whose pre-commit hook ran whole-repo checks unconditionally (not scoped to staged files):
+
+- Copied files are formatted to *this* module's style, not the target's — the first commit after setup can fail a whole-repo `prettier --check .`/`oxlint`/etc. pre-commit hook immediately, even though nothing about the target project itself is broken.
+- The target's own lint/typecheck rules can flag legitimate patterns in the module's plain-Node scripts that are never bundled into the app (e.g. an Expo project's `no-dynamic-env-var` rule, meant for Metro-bundled app code, tripping on `agent-runner.ts`'s `process.env[CONFIG.llm.apiKeyEnv]` — a correct, necessary dynamic access for a script that's never bundled).
+
+### Format the copied files once
+
+After every copy step above (steps 5-11) has run, execute the target's own `format_write_cmd` (from `.ai/config.json`) scoped to `skills/` and `.ai/`, so the module's content matches the target's formatting conventions immediately instead of failing on the first commit.
+
+### Append to every exclude mechanism the target project has
+
+Detect which of these config files exist in the target project root, and append `skills/` and `.ai/` (or their idiomatic per-tool equivalents) to each one that does. Merge into existing arrays/lists — don't overwrite, and don't create a new ignore file for a tool that isn't actually in use just to add these entries:
+
+| Tool | File | What to add |
+|------|------|-------------|
+| Prettier | `.prettierignore` | `skills/` and `.ai/` as new lines |
+| ESLint (legacy) | `.eslintignore` | `skills/` and `.ai/` as new lines |
+| ESLint (flat config) | `eslint.config.{js,mjs,cjs,ts}` | A leading `{ ignores: ['skills/**', '.ai/**'] }` object in the exported array — flat config treats an ignores-only object anywhere in the array as a global ignore |
+| oxlint | `.oxlintrc.json` | `skills/**` and `.ai/**` appended to `ignorePatterns` |
+| Biome | `biome.json`/`biome.jsonc` | `skills/**` and `.ai/**` appended to the version-appropriate ignore field (`files.ignore` on older Biome, `files.includes` with `!skills/**`/`!.ai/**` negation on newer Biome — check which shape the target's `biome.json` already uses) |
+| TypeScript | `tsconfig.json` | `skills/**` and `.ai/**` appended to `exclude` — the default typecheck gate (`tsc --noEmit`) scans the whole project, and the module's Node-only scripts fail under an app's stricter/Metro-flavored config (missing `@types/node`, no `allowImportingTsExtensions`, etc.) |
+
+If a config file's format can't be safely parsed and merged as-is (e.g. `tsconfig.json` with JSONC comments defeating a naive `JSON.parse`), edit it as text instead of overwriting the file, and warn the user to double-check the result if the edit looks fragile.
 
 ## Repo hygiene
 

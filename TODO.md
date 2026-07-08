@@ -54,26 +54,6 @@ evaluation/scoring hooks — instead of building bespoke logging further. Would 
 `callOpenRouter()` in `agent-runner.ts` (wrap the fetch call) and log role/slug/model/tokens/latency/verdict
 per call as a trace.
 
-## afp-setup should exclude its own module content from the target's lint/format tooling
-
-Found live-testing on a real Expo/React Native project whose pre-commit hook runs whole-repo
-`prettier --check .` + `oxlint` unconditionally (not scoped to staged files). Two failures, both entirely from
-our own copied-in files, neither caused by anything wrong with the target project:
-- Every copied prompt/registry/config file was Prettier-unformatted relative to the target's own style — first
-  commit after `pnpm install` regenerates hook glue fails immediately.
-- `agent-runner.ts`'s `process.env[CONFIG.openRouter.apiKeyEnv]` (a correct, necessary dynamic access for a
-  plain Node script) tripped `expo(no-dynamic-env-var)` — a rule meant for the app's own Metro-bundled code,
-  applied blindly to a script that's never bundled.
-
-Fixed manually this session by running the target's own formatter once, adding `skills/`/`.ai/` to
-`.oxlintrc.json`'s `ignorePatterns` and `.prettierignore`, and — found one stage later, same root cause —
-adding both to `tsconfig.json`'s `exclude` (the default typecheck gate scans the whole project too, and our
-Node-only scripts fail under the target's Expo/RN-flavored tsconfig: missing `@types/node`, no `allowImportingTsExtensions`, stricter `noImplicitAny`). `afp-setup` should do all of this automatically as part of setup —
-run `commands.formatWrite` over the newly-added files, and append the module's install paths to every
-lint/format/typecheck exclude mechanism the target project has (`.prettierignore`, `.eslintignore`,
-`.oxlintrc.json`'s `ignorePatterns`, `tsconfig.json`'s `exclude`, etc. — detect which config files exist and
-append to each rather than assuming one).
-
 ## GitLab support — run-pipeline.sh's PR step is GitHub-only
 
 `run-pipeline.sh`'s final stage hardcodes `gh pr create`/`gh pr edit`/`gh pr list`. On a GitLab-hosted project
