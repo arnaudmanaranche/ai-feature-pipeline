@@ -1203,7 +1203,7 @@ function parseToolArgs(argsRaw: string, role: string, slug: string): AgentResult
 
 // --- LLM API (generic OpenAI-compatible chat-completions + tool-calling) ---
 
-async function callOpenRouter(
+async function callLlm(
   role: string,
   slug: string,
   model: string,
@@ -1841,7 +1841,7 @@ async function main() {
     result = mockResponse(role, slug);
   } else {
     console.log('  Calling the LLM API...');
-    result = await callOpenRouter(
+    result = await callLlm(
       role,
       slug,
       config.model,
