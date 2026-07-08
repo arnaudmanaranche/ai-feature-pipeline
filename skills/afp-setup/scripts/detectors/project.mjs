@@ -17,7 +17,7 @@ export function detectProjectName(pkg, root) {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-export function detectAppId(pkg, root) {
+export function detectAppId(pkg, root, projectType) {
   // expo app.json (static)
   const appJson = readJson(root, 'app.json');
   if (appJson?.expo?.android?.package) return appJson.expo.android.package;
@@ -38,6 +38,12 @@ export function detectAppId(pkg, root) {
   // Capacitor
   const capacitorJson = readJson(root, 'capacitor.config.json');
   if (capacitorJson?.appId) return capacitorJson.appId;
+
+  // No explicit mobile config found. A bundle-id-shaped fallback like
+  // `com.example.<name>` is meaningless for a webapp — only fabricate one
+  // for mobile/unknown projects, where it's at worst a placeholder for a
+  // field that's actually applicable.
+  if (projectType === 'web') return '';
 
   // Derive from package name
   if (pkg?.name) {

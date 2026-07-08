@@ -56,7 +56,8 @@ Which one? [1/2/or type your own]
 | Field | How it's detected |
 |-------|-------------------|
 | `project_name` | `package.json` → `name`, falls back to directory name |
-| `app_id` | `app.json` (Expo), `capacitor.config.json`, or derived from package name |
+| `project_type` | `mobile` if `expo`/`react-native` is a dependency, `web` if `next`/`vite`/`react-scripts`/`nuxt`/`@sveltejs/kit`/`astro`/`@angular/core` is, else `unknown` — not a config field itself, used to gate `app_id`/`paywall_provider` framing below |
+| `app_id` | `app.json` (Expo), `app.config.ts`/`.js`, or `capacitor.config.json` — these are checked regardless of `project_type` since they're unambiguous mobile signals on their own. If none of them match **and** `project_type` is `web`, returns empty (no fabricated `com.example.*` bundle id — meaningless for a webapp) |
 | `github_repo` | `.git/config` remote URL |
 | `package_manager` | Presence of `bun.lockb`, `pnpm-lock.yaml`, `yarn.lock` |
 | `typecheck_cmd` | `package.json` → `scripts` (looks for `typecheck`, `type-check`, etc.) |
@@ -76,6 +77,14 @@ Which one? [1/2/or type your own]
 | `source_dirs` | Directory presence (`src`, `app`, `pages`) and framework |
 | `skip_dirs` | Framework-aware (adds `ios`, `android`, `.expo` for React Native; `.next` for Next.js) |
 | `source_extensions` | TypeScript presence, Vue, Svelte |
+
+### Mobile-only fields — skip or relabel for web projects
+
+`app_id` and the paywall provider question are meaningless, or at least mobile-framed, for a webapp. Use `project_type` to adjust:
+
+- **`project_type: "web"`** — skip the `app_id` prompt entirely (don't ask; write `""` to config). When prompting for `paywall_provider`, don't frame the question in mobile terms — Stripe or LemonSqueezy are the expected answers, not RevenueCat/expo-iap.
+- **`project_type: "mobile"`** — prompt for `app_id` as usual; any paywall provider (including Stripe, if it's a hybrid app with a web billing portal) is fair game.
+- **`project_type: "unknown"`** — still prompt for `app_id`, but don't assume a default beyond what `detect-stack.mjs` returned; ask plainly rather than presenting a mobile-flavored example.
 
 ### Prompt format
 

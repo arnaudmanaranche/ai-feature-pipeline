@@ -10,6 +10,7 @@
 import { readJson } from './detectors/fs-helpers.mjs';
 import { detectPackageManager, detectRunScript, detectTypecheckCmd, detectLintCmd, detectTestCmd, detectFormatCmd, detectFormatWriteCmd } from './detectors/commands.mjs';
 import { detectProjectName, detectAppId, detectGithubRepo, detectDefaultBranch } from './detectors/project.mjs';
+import { detectProjectType } from './detectors/project-type.mjs';
 import { detectRouter, detectStyling, detectBackend } from './detectors/stack.mjs';
 import { detectAnalytics } from './detectors/analytics.mjs';
 import { detectPaywall } from './detectors/paywall.mjs';
@@ -33,10 +34,12 @@ const sourceDirs = detectSourceDirs(pkg, ROOT);
 const skipDirs = detectSkipDirs(pkg, ROOT);
 const sourceExtensions = detectSourceExtensions(pkg);
 const packageManager = detectPackageManager(ROOT);
+const projectType = detectProjectType(pkg);
 
 const detected = {
   project_name:       detectProjectName(pkg, ROOT),
-  app_id:             detectAppId(pkg, ROOT),
+  project_type:       projectType,
+  app_id:             detectAppId(pkg, ROOT, projectType),
   github_repo:        detectGithubRepo(ROOT),
   package_manager:    packageManager,
   run_script:         detectRunScript(pkg),

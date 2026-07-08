@@ -88,15 +88,6 @@ from the remote URL, mirroring what `detectGithubRepo()` already half-does.
 Messages API and Bedrock use a different request/response shape entirely and would need a real adapter, not
 just a config change — scope that separately if/when needed.
 
-## app_id / paywall_provider assume a mobile app regardless of project type
-
-`module.yaml` prompts for `app_id` ("What is your app bundle ID?", default `com.example.app`) unconditionally
-— meaningless for a webapp. `detect-stack.mjs`'s paywall detection also mixes mobile-only providers
-(RevenueCat, expo-iap) with web-capable ones (Stripe) without distinguishing project type first. Direction:
-detect project type (mobile vs web, e.g. via Expo/React Native vs Next.js/Vite presence) as an early signal in
-`detect-stack.mjs`, and skip/relabel mobile-specific prompts (`app_id`, paywall provider framing) when the
-target is a webapp.
-
 ### Distinct sub-case: people with only a Claude subscription, no API key
 
 The interactive skill mode (`/start afp-pipeline` run directly inside Claude Code) already covers this —
