@@ -88,13 +88,6 @@ from the remote URL, mirroring what `detectGithubRepo()` already half-does.
 Messages API and Bedrock use a different request/response shape entirely and would need a real adapter, not
 just a config change — scope that separately if/when needed.
 
-## detect-stack.mjs is growing into a god-file
-
-432 lines and climbing every time a new stack signal gets added (package manager, analytics, paywall, backend,
-error tracking, e2e, router, styling, locales...). Not unmanageable yet, but worth splitting into per-concern
-detectors (e.g. `detect-analytics.mjs`, `detect-paywall.mjs`) before it becomes one, especially since the
-"afp-setup should read CI config" item above will add even more detection surface to the same file.
-
 ## app_id / paywall_provider assume a mobile app regardless of project type
 
 `module.yaml` prompts for `app_id` ("What is your app bundle ID?", default `com.example.app`) unconditionally
