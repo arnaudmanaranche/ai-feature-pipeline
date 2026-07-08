@@ -54,7 +54,7 @@ Or interactively: "Run the AFP Pipeline to scope a new feature."
 
 | Module | What it does | Use when |
 |--------|--------------|----------|
-| [afp-setup](skills/afp-setup/SKILL.md) | Auto-detects your stack, generates `.ai/config.json` and `.ai/agents.json`, copies governance files and registries into `.ai/` | First-time install in a project |
+| [afp-setup](skills/afp-setup/SKILL.md) | Auto-detects your stack, generates `.ai/config.json` and `.ai/agents.json`, copies governance files, registries, and a `.ai/.gitignore` into `.ai/` | First-time install in a project |
 | [afp-pipeline](skills/afp-pipeline/SKILL.md) | Runs the 7-role feature workflow end to end inside an isolated git worktree, from brief to PR | Every feature, from `new "<description>"` |
 
 ---
@@ -148,8 +148,10 @@ skills/
         ├── DENIED_ACTIONS.md
         ├── technical-plan.md
         ├── repository-context.md
+        ├── ai-gitignore        # Copied to .ai/.gitignore (repo hygiene)
         └── scripts/
-            └── new-feature.sh  # Copied to .ai/scripts/new-feature.sh
+            ├── new-feature.sh       # Copied to .ai/scripts/new-feature.sh
+            └── prune-artifacts.sh   # Copied to .ai/scripts/ (untrack/archive maintenance)
 ```
 
 ---
@@ -194,7 +196,21 @@ A single Review call is the pipeline's weakest gate: nothing contradicts a plaus
 
 ### Repo memory (`.ai/context.json`)
 
-Before the Architect runs, `rebuild-context.mjs` scans `sourceDirs` and rebuilds `.ai/context.json` — a symbol index, per-file exports/imports, and a dependency map the Architect (and, indirectly, Dev) uses instead of re-discovering the codebase from scratch on every feature. When the target project has `typescript` installed, extraction goes through the real TypeScript compiler API (handles `export * from`, renamed re-exports, enums — things regex parsing misses); it falls back to regex extraction for plain-JS projects. Each file is fingerprinted by mtime, so unchanged files are never reparsed — only files that actually changed since the last run cost anything.
+Before the Architect runs, `rebuild-context.mjs` scans `sourceDirs` and rebuilds `.ai/context.json` — a symbol index, per-file exports/imports, and a dependency map the Architect (and, indirectly, Dev) uses instead of re-discovering the codebase from scratch on every feature. When the target project has `typescript` installed, extraction goes through the real TypeScript compiler API (handles `export * from`, renamed re-exports, enums — things regex parsing misses); it falls back to regex extraction for plain-JS projects. Each file is fingerprinted by mtime, so unchanged files are never reparsed — only files that actually changed since the last run cost anything. Because it's fully derived from source, `.ai/context.json` is git-ignored (see **Repo hygiene** below) — it's regenerated on demand, never versioned.
+
+### Repo hygiene & file growth
+
+The pipeline writes two kinds of file, and only one belongs in git long-term:
+
+- **Durable knowledge** (kept): feature briefs, technical plans, reviews, QA reports, retrospectives, `project-memory.md`, the memory-compact counter, and the `.architect-approved` design-approval hash. This is the paper trail and the cross-session memory.
+- **Derived / per-run debug** (ignored): `context.json` (rebuilt every run) and the per-feature `.agent-*` files — raw `submit_changes` payloads (full file contents, often hundreds of KB), status flags, manifests, token accounting, and retry feedback. These are needed only during the run that writes them.
+
+`afp-setup` installs a `.ai/.gitignore` covering the second kind, so a project that ships hundreds of features doesn't accumulate LLM dumps and a regenerable index in its history. `project-memory.md` itself stays bounded by design (four fixed categories + periodic `memory-compact` deduplication), not by growing one section per feature.
+
+Two maintenance commands (`.ai/scripts/prune-artifacts.sh`, human-run, `--dry-run` to preview):
+
+- `--untrack` — one-time migration for a repo that committed those debug files before the `.gitignore` existed; stops tracking them without touching your working copy.
+- `--archive <slug>` / `--archive-older-than <days>` — packs shipped feature folders you no longer need live into `.ai/archive/<slug>.tar.gz`. Nothing in the pipeline reads a past feature's folder (Retro reads only the current one; cross-feature knowledge flows through `project-memory.md`), so archiving is lossless for the workflow.
 
 ### E2E verification (QA) is framework-agnostic by contract, not by running anything itself
 

@@ -15,6 +15,8 @@ Run this skill when you first install the module in a project. It auto-detects t
 7. Copies registry files (scope-checklist, ship-checklist, analytics-events, paywall-touchpoints) into `.ai/registry/`
 8. Copies governance files (GOVERNANCE.md, DENIED_ACTIONS.md) from `skills/afp-pipeline/templates/` into `.ai/`
 9. Copies `skills/afp-pipeline/templates/scripts/new-feature.sh` into `.ai/scripts/new-feature.sh` and makes it executable (`chmod +x`) — `run-pipeline.sh` depends on this script to scaffold new feature folders
+10. Copies `skills/afp-pipeline/templates/ai-gitignore` into `.ai/.gitignore` — keeps derived (`context.json`) and per-run debug files (`.agent-*` dumps) out of git history so the repo doesn't grow unbounded, while keeping durable knowledge (briefs, plans, reviews, retros, `project-memory.md`, the memory-compact counter, the `.architect-approved` hash) tracked. **Do not overwrite an existing `.ai/.gitignore` that has project-specific additions — merge instead.**
+11. Copies `skills/afp-pipeline/templates/scripts/prune-artifacts.sh` into `.ai/scripts/prune-artifacts.sh` and makes it executable (`chmod +x`) — a human-run maintenance tool for repo hygiene (see **Repo hygiene** below)
 
 ## Auto-detection
 
@@ -110,6 +112,24 @@ The `dev` role entry additionally supports two optional fields for injecting fil
 ## Configuration variables
 
 See `assets/module.yaml` for the full list of configurable values and their defaults.
+
+## Repo hygiene
+
+The pipeline writes two kinds of files: **durable knowledge** worth keeping in git (feature briefs, technical plans, reviews, retrospectives, `project-memory.md`, the memory-compact counter, the `.architect-approved` design-approval hash) and **derived/ephemeral** files that should not accumulate in history (`context.json`, rebuilt from source every run; and per-run `.agent-*` debug dumps — raw LLM `submit_changes` payloads that can be hundreds of KB each). The `.ai/.gitignore` installed in step 10 keeps the second kind out of git.
+
+**Existing installs (the module was already in use before `.ai/.gitignore` existed):** those debug files are already tracked, so the new ignore rules alone won't drop them. Run the one-time migration to untrack them (your working copy is untouched):
+
+```bash
+.ai/scripts/prune-artifacts.sh --untrack        # add --dry-run first to preview
+git commit -m "chore(afp): untrack pipeline debug files"
+```
+
+**Ongoing:** to reclaim space from feature folders you no longer need live, archive them into `.ai/archive/<slug>.tar.gz` (nothing in the pipeline reads a past feature's folder, so this is lossless for the workflow):
+
+```bash
+.ai/scripts/prune-artifacts.sh --archive <slug>            # or
+.ai/scripts/prune-artifacts.sh --archive-older-than 90     # folders untouched for 90+ days
+```
 
 ## Notes
 

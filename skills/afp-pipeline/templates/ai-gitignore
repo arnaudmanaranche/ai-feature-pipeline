@@ -1,0 +1,25 @@
+# .ai/.gitignore — installed into <project>/.ai/ by the afp-setup skill.
+#
+# Keeps the pipeline's *durable knowledge* in git (feature briefs, technical
+# plans, reviews, retrospectives, project-memory.md, the memory-compact
+# counter, the design-approval hash) while keeping *derived* and *per-run
+# debug* files out of history. Without this, every feature commits raw LLM
+# response dumps and a regenerable code index, so the repo grows unbounded.
+
+# Derived from source — rebuilt by rebuild-context.mjs before every Architect
+# run, so there is never a reason to version it (and it can be large on big
+# codebases). Regenerated on demand; a fresh worktree just rebuilds it.
+context.json
+
+# Per-run agent debug & telemetry, written into each feature folder:
+#   .agent-<role>-response.md   raw submit_changes payloads (the bulk — can be
+#                               hundreds of KB per run: full file contents)
+#   .agent-status*.json         verdict/status flags read within a single run
+#   .agent-*-manifest.json      parsed file/artifact manifests
+#   .agent-token-usage.json     per-feature token accounting
+#   .agent-*-feedback.md        typecheck/lint/review retry feedback
+# All of these are on disk during the run that needs them; none is knowledge
+# worth carrying in history. NOTE: this pattern deliberately does NOT match
+# `.architect-approved` (the design-approval plan hash), which stays tracked
+# as part of the audit trail.
+artifacts/features/*/.agent-*
