@@ -4,6 +4,8 @@
 
 Each role produces artifacts, gates, and handoffs — so shipping a feature with an AI agent looks like shipping one with a team, not a single unreviewed diff.
 
+📖 **[Design principles & guarantees](https://github.com/arnaudmanaranche/ai-feature-pipeline/wiki/Design-Principles-and-Guarantees)** — what AFP actually guarantees (trust, auditability, bounded growth, measurable self-improvement).
+
 ```
   SCOPE           CLARIFY         DESIGN          BUILD           REVIEW          VERIFY          LEARN
  ┌──────┐      ┌──────────┐    ┌──────────┐    ┌──────┐       ┌────────┐     ┌──────┐        ┌───────┐
