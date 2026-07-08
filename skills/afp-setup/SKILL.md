@@ -28,6 +28,29 @@ node skills/afp-setup/scripts/detect-stack.mjs --project-root=<project-root>
 
 This scans the project and returns a JSON object with pre-filled values for all config fields. Use these as the defaults for every prompt — show the detected value to the user so they can confirm or override it.
 
+### Second pass: read CI config for what the script can't verify
+
+`detect-stack.mjs` only reads `package.json` — it's the deterministic, reproducible first pass, and stays that way. But `package.json` scripts are frequently aliases or partial; the commands a CI pipeline *actually* gates on are ground truth the script has no way to see, and some institutional knowledge (i18n managed by an external platform, which git host a repo lives on) isn't in `package.json` at all. This is judgment work, so it belongs to you (the skill), not the script.
+
+After running `detect-stack.mjs` and before presenting any prompts, also read — if present — `.github/workflows/*.yml`, `.gitlab-ci.yml`, and `README.md`. Look for:
+
+- **Real CI gate commands** — the actual `run:`/`script:` lines that invoke typecheck, lint, test, and format in CI. These are often more specific than the script's guess (e.g. `pnpm run lint:ci -- --max-warnings=0` vs. the script's generic `pnpm run lint`).
+- **i18n tooling** — mentions of translation-management platforms (Loco, Lokalise, Phrase, Crowdin, etc.) in workflows or README, which mean locale files are generated/pulled rather than hand-edited locally — `detect-stack.mjs`'s `locales`/`locale_dir` guess from local files is misleading in that case.
+- **Git host** — presence of `.gitlab-ci.yml` (or a `.git/config` remote pointing elsewhere) vs. `.github/workflows/`, to know whether this is a GitHub or GitLab project.
+
+**When a CI-derived command conflicts with the script-detected one** (`typecheck_cmd`, `lint_cmd`, `test_cmd`, `format_cmd`, `format_write_cmd`): do not silently prefer either one. Show both explicitly and require the user to pick, rather than letting a bare Enter accept a default:
+
+```
+Lint command:
+  • from package.json scripts : pnpm run lint
+  • from .github/workflows/ci.yml : pnpm run lint:ci -- --max-warnings=0
+Which one? [1/2/or type your own]
+```
+
+**When you find institutional knowledge that doesn't map to an existing config field** (e.g. "i18n is managed externally via Loco, not local locale files"): don't discard it and don't just mention it in the chat transcript — append it to `.ai/project-context.md` under a `## Setup notes` heading, creating the file if it doesn't exist yet (if it already exists, append rather than overwrite, same as the `.ai/.gitignore` merge rule above). This file is read by `agent-runner.ts` and injected into every role's system prompt, so a note recorded here is visible to pm, architect, dev, review, and every other agent for the life of the project — not just during setup.
+
+**When the repository is hosted on GitLab, not GitHub:** warn the user during setup that `run-pipeline.sh`'s final stage (`gh pr create`/`gh pr edit`) is GitHub-only and will fail harmlessly (pipeline completes, no PR/MR gets opened) until GitLab support is added. Don't change any config value for this — there's no `git_host` field yet, and wiring up an actual `glab mr create` path is tracked separately.
+
 ### What gets detected automatically
 
 | Field | How it's detected |
@@ -134,5 +157,6 @@ git commit -m "chore(afp): untrack pipeline debug files"
 ## Notes
 
 - `.ai/GOVERNANCE.md` and `.ai/DENIED_ACTIONS.md` are injected into every agent's context. Edit them to add project-specific rules.
+- `.ai/project-context.md` is also injected into every agent's context (see **Second pass** above) — anything appended there under `## Setup notes` persists across the whole project lifetime, not just setup.
 - Re-running this skill will overwrite `.ai/config.json` — back it up first if you have customisations.
-- The detection script only reads files — it never modifies the project.
+- The detection script only reads files — it never modifies the project. The CI-config second pass (done by the skill, not the script) also only reads files, except for the append-only write to `.ai/project-context.md` described above.
