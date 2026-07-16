@@ -30,6 +30,7 @@ import {
   missingRequiredFields,
   trimContextForPrompt,
   evaluateClaudeCliResult,
+  extractImpactedFiles,
 } from '../skills/afp-pipeline/scripts/agent-runner.ts';
 import type { TokenUsage } from '../skills/afp-pipeline/scripts/agent-runner.ts';
 
@@ -660,6 +661,51 @@ describe('evaluateClaudeCliResult — claude-cli backend response handling', () 
     if (evaluation.status === 'success') {
       assert.equal(evaluation.result.usageTokens, undefined);
     }
+  });
+});
+
+describe('extractImpactedFiles — Dev batching input', () => {
+  test('extracts backtick-quoted source file paths, deduplicated', () => {
+    const plan = `
+## Files to change
+
+- \`src/screens/settings.tsx\` — add toggle
+- \`src/hooks/use-feature.ts\` — new hook
+- \`src/screens/settings.tsx\` — also update styles (duplicate reference)
+`;
+    assert.deepEqual(extractImpactedFiles(plan), [
+      'src/screens/settings.tsx',
+      'src/hooks/use-feature.ts',
+    ]);
+  });
+
+  test('matches bold-wrapped backtick paths too', () => {
+    const plan = '**`src/components/card.tsx`** — new component';
+    assert.deepEqual(extractImpactedFiles(plan), ['src/components/card.tsx']);
+  });
+
+  test('skips .ai/ artifact paths and template placeholders with braces', () => {
+    const plan = `
+- \`.ai/artifacts/features/x/dev-log.md\` — not a source file
+- \`src/{feature}/index.ts\` — template placeholder, not a real path
+- \`src/real-file.ts\` — an actual file
+`;
+    assert.deepEqual(extractImpactedFiles(plan), ['src/real-file.ts']);
+  });
+
+  test('empty or missing plan yields an empty list', () => {
+    assert.deepEqual(extractImpactedFiles(''), []);
+    assert.deepEqual(extractImpactedFiles('[file not found: technical-plan.md]'), []);
+  });
+
+  test('recognizes every supported extension', () => {
+    const plan = [
+      '`a.ts`', '`b.tsx`', '`c.js`', '`d.jsx`', '`e.css`', '`f.json`', '`g.yaml`', '`h.yml`', '`i.md`',
+    ].join(' ');
+    assert.deepEqual(
+      extractImpactedFiles(plan),
+      ['a.ts', 'b.tsx', 'c.js', 'd.jsx', 'e.css', 'f.json', 'g.yaml', 'h.yml', 'i.md']
+    );
   });
 });
 

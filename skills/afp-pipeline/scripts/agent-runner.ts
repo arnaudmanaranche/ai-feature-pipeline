@@ -52,6 +52,11 @@ interface ProjectConfig {
     // Opt-in circuit breaker on total OpenRouter token spend per feature.
     // Undefined or 0 means unlimited (the pre-existing behavior).
     maxTokensPerFeature?: number;
+    // Max files Dev is asked to touch in a single call before main() splits
+    // the technical plan's impacted-file list into multiple sequential
+    // calls (see "Dev batching" in main()). Undefined/0 falls back to
+    // DEFAULT_DEV_FILE_BATCH_SIZE.
+    devFileBatchSize?: number;
   };
   bot: { name: string; email: string };
   commands: {
@@ -124,6 +129,15 @@ interface ProjectConfig {
 }
 
 const DEFAULT_LLM_BASE_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
+// Found live: a real ~13-file feature truncated (finish_reason: "length")
+// at maxTokens=64000 trying to emit every touched file's complete content
+// in one submit_changes call — cranking maxTokens further just hits the
+// provider's real output ceiling and burns cost ($1.21 for that one
+// attempt). Below this many impacted files, Dev still gets exactly one
+// call (unchanged behavior); at or above it, main() splits the technical
+// plan's file list into sequential batches instead.
+const DEFAULT_DEV_FILE_BATCH_SIZE = 6;
 
 function loadProjectConfig(): ProjectConfig {
   const configPath = join(getRoot(), '.ai/config.json');
@@ -511,11 +525,43 @@ function trimContextForPrompt(ctxData: string): string {
   }
 }
 
+// Extracts file paths the Architect's technical plan references — matches
+// backtick-quoted paths anywhere on a line (not just at line start) to
+// handle varied formatting:
+//   - `path/to/file.ts` — description
+//   **`path/to/file.ts`** — description
+// Shared between prompt injection (existing-file content for Dev) and Dev
+// batch planning in main() (splitting a large file list across calls).
+function extractImpactedFiles(techPlan: string): string[] {
+  if (!techPlan) return [];
+  const fileRefPattern = /`([a-zA-Z0-9_./@()/-]+\.(?:ts|tsx|js|jsx|css|json|yaml|yml|md))`/g;
+  const fileRefSet = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = fileRefPattern.exec(techPlan)) !== null) {
+    const p = m[1];
+    // Skip template paths and .ai artifact paths — those are not source files
+    if (!p.startsWith('.ai/') && !p.includes('{')) fileRefSet.add(p);
+  }
+  return [...fileRefSet];
+}
+
+// When set, restricts a dev-role prompt to a single batch of the technical
+// plan's impacted files instead of the whole feature — see "Dev batching"
+// in main() for why (a single call covering every touched file truncates
+// on features with enough files, with no graceful degradation).
+interface DevBatch {
+  files: string[];
+  index: number;
+  total: number;
+  allPlannedFiles: string[];
+}
+
 function buildUserPrompt(
   role: string,
   slug: string,
   ctx: ReturnType<typeof loadContext>,
-  config: RoleConfig
+  config: RoleConfig,
+  devBatch?: DevBatch
 ) {
   const sections: string[] = [];
 
@@ -685,24 +731,15 @@ function buildUserPrompt(
       );
     }
     // Inject existing file contents for files listed in the tech plan
-    // so the Dev sees real code instead of hallucinating replacements
+    // so the Dev sees real code instead of hallucinating replacements.
+    // When devBatch is set, only THIS batch's files get full content
+    // injected — keeps the call's prompt (and truncation risk) bounded
+    // regardless of how many files the whole feature touches.
     const impactedFilePaths: string[] = [];
     if (techPlan) {
-      // Extract file paths from the tech plan. Matches backtick-quoted paths
-      // anywhere on a line (not just at line start) to handle varied formatting:
-      //   - `path/to/file.ts` — description
-      //   **`path/to/file.ts`** — description
-      //   - path/to/file.ts — description (no backticks, fallback)
-      const fileRefPattern = /`([a-zA-Z0-9_./@()/-]+\.(?:ts|tsx|js|jsx|css|json|yaml|yml|md))`/g;
-      const fileRefSet = new Set<string>();
-      let m: RegExpExecArray | null;
-      while ((m = fileRefPattern.exec(techPlan)) !== null) {
-        const p = m[1];
-        // Skip template paths and .ai artifact paths — those are not source files
-        if (!p.startsWith('.ai/') && !p.includes('{')) fileRefSet.add(p);
-      }
-      const fileRefs = fileRefSet.size > 0 ? [...fileRefSet] : null;
-      if (fileRefs) {
+      const allFileRefs = extractImpactedFiles(techPlan);
+      const fileRefs = devBatch ? devBatch.files : allFileRefs;
+      if (fileRefs.length > 0) {
         const seen = new Set<string>();
         sections.push(
           `\n## Existing files to modify\n\nBelow is the current content of each existing file you need to modify. Read them carefully — YOUR OUTPUT WILL REPLACE THE ENTIRE FILE, so you must preserve existing functionality and only add/change what's needed.\n`
@@ -719,6 +756,17 @@ function buildUserPrompt(
               `### \`${filePath}\`\n\n\`\`\`${ext}\n${content}\n\`\`\``
             );
           }
+        }
+      }
+      // List the OTHER planned files by name only (no content) so Dev keeps
+      // architectural awareness of the whole feature without bloating this
+      // batch's prompt with files it must not touch this call.
+      if (devBatch) {
+        const others = allFileRefs.filter(f => !devBatch.files.includes(f));
+        if (others.length > 0) {
+          sections.push(
+            `\n## Other files in this feature (handled in a different batch — do NOT include these in your \`files\` output this call)\n\n${others.map(f => `- \`${f}\``).join('\n')}`
+          );
         }
       }
     }
@@ -1017,6 +1065,12 @@ Do NOT touch any feature artifact — this role may only submit \`.ai/project-me
   };
 
   sections.push(`## Task\n\n${tasks[role]}`);
+
+  if (devBatch) {
+    sections.push(
+      `## This call is batch ${devBatch.index + 1} of ${devBatch.total}\n\nThis feature touches too many files for one call, so it's split into batches. **Only** create/modify the following files in your \`files\` output this call — do not include any file outside this list, even ones you can see mentioned elsewhere in the plan:\n\n${devBatch.files.map(f => `- \`${f}\``).join('\n')}\n\nAppend (don't replace) your notes for this batch to the existing \`dev-log.md\` shown above — later batches and other roles read the whole log.`
+    );
+  }
 
   sections.push(
     `\n\nOutput your response using the structured format specified in the system prompt.`
@@ -1688,6 +1742,109 @@ function applyChanges(
   }
 }
 
+// --- Dev batching ---
+//
+// A single call asking Dev to emit the COMPLETE content of every touched
+// file doesn't scale: found live on a real ~13-file feature, Dev hit
+// `finish_reason: "length"` (truncated mid-JSON) at maxTokens=24000, then
+// again at maxTokens=64000 — cranking maxTokens further just runs into the
+// model/provider's real output ceiling, at real cost ($1.21 for that one
+// 64000-token attempt). Below DEFAULT_DEV_FILE_BATCH_SIZE (or
+// project.devFileBatchSize) impacted files, main() makes exactly one call,
+// identical to before. At/above it, this splits the technical plan's
+// impacted-file list into sequential batches — each an ordinary callLlm()
+// call whose result is applied to disk immediately, so later batches see
+// earlier ones' files via read() the same way a retry sees the previous
+// attempt's output. run-pipeline.sh is unaware of any of this: quality
+// gates, commits, and retries still run once per external `agent-runner.ts
+// --role=dev` invocation, exactly as before.
+async function runDevBatched(
+  slug: string,
+  ctx: ReturnType<typeof loadContext>,
+  config: RoleConfig,
+  systemPrompt: string,
+  allPlannedFiles: string[],
+  batchSize: number
+): Promise<AgentResult> {
+  const batches: string[][] = [];
+  for (let i = 0; i < allPlannedFiles.length; i += batchSize) {
+    batches.push(allPlannedFiles.slice(i, i + batchSize));
+  }
+
+  const allFiles: FileChange[] = [];
+  const allArtifacts: ArtifactChange[] = [];
+  const rawParts: string[] = [];
+
+  for (let i = 0; i < batches.length; i++) {
+    const batchFiles = batches[i];
+    console.log(
+      `\n  --- Dev batch ${i + 1}/${batches.length}: ${batchFiles.join(', ')} ---`
+    );
+
+    // Fresh budget check before each batch, not just once before the whole
+    // role runs — a batched feature can spend far more than a single call
+    // would, so a mid-run abort has to see every prior batch's real spend.
+    const usageBefore = loadTokenUsage(ctx.featureDir);
+    const budget = CONFIG.project.maxTokensPerFeature;
+    if (isOverBudget(usageBefore, budget)) {
+      console.error(
+        `❌ Token budget exceeded for feature "${slug}" mid-batch (${i}/${batches.length} batches done): ${usageBefore.totalTokens}/${budget} tokens already spent.`
+      );
+      console.error(
+        `   Raise project.maxTokensPerFeature in .ai/config.json, or take over this feature manually.`
+      );
+      process.exit(1);
+    }
+
+    const userPrompt = buildUserPrompt('dev', slug, ctx, config, {
+      files: batchFiles,
+      index: i,
+      total: batches.length,
+      allPlannedFiles,
+    });
+
+    const batchResult = await callLlm(
+      'dev',
+      slug,
+      config.model,
+      systemPrompt,
+      userPrompt,
+      config.maxTokens
+    );
+
+    allFiles.push(...batchResult.files);
+    allArtifacts.push(...batchResult.artifacts);
+    rawParts.push(
+      `### Batch ${i + 1}/${batches.length} (${batchFiles.join(', ')})\n\n${batchResult.raw}`
+    );
+
+    if (typeof batchResult.usageTokens === 'number') {
+      const usage = loadTokenUsage(ctx.featureDir);
+      usage.totalTokens += batchResult.usageTokens;
+      usage.calls.push({ role: 'dev', tokens: batchResult.usageTokens });
+      saveTokenUsage(ctx.featureDir, usage);
+      if (budget && budget > 0) {
+        console.log(
+          `  Cumulative tokens for "${slug}": ${usage.totalTokens}/${budget}`
+        );
+      }
+    }
+
+    // Apply this batch's changes immediately — later batches read them back
+    // as "existing file content" via buildUserPrompt's normal read() path.
+    applyChanges('dev', batchResult.files, batchResult.artifacts, slug, false);
+  }
+
+  return {
+    files: allFiles,
+    artifacts: allArtifacts,
+    verdict: '',
+    raw: rawParts.join('\n\n'),
+    // Already recorded per-batch above — main() must not double-record.
+    usageTokens: undefined,
+  };
+}
+
 // --- Main ---
 
 function mockResponse(role: string, slug: string): AgentResult {
@@ -2031,32 +2188,61 @@ async function main() {
   // which prompt produced this?") without diffing prose.
   const promptSha = createHash('sha256').update(skillContent).digest('hex').slice(0, 12);
 
-  // 3. Build prompts
+  // 3. Build prompts, then call the LLM API (or use mock for dry-run) —
+  // output is already schema-validated JSON from the submit_changes tool
+  // call, no parsing step. See "Dev batching" above runDevBatched() for why
+  // Dev sometimes takes multiple calls here instead of exactly one.
   console.log('  Building prompts...');
   const systemPrompt = buildSystemPrompt(role, skillContent);
-  const userPrompt = buildUserPrompt(role, slug, ctx, config);
 
-  // 4. Call the LLM API (or use mock for dry-run) — output is already
-  // schema-validated JSON from the submit_changes tool call, no parsing step.
   let result: AgentResult;
+  let devBatched = false;
   if (isDryRun) {
     console.log('  DRY RUN — using mock response');
     result = mockResponse(role, slug);
   } else {
-    console.log('  Calling the LLM API...');
-    result = await callLlm(
-      role,
-      slug,
-      config.model,
-      systemPrompt,
-      userPrompt,
-      config.maxTokens
-    );
+    let allPlannedFiles: string[] = [];
+    let devBatchSize = DEFAULT_DEV_FILE_BATCH_SIZE;
+    if (role === 'dev') {
+      const techPlan = read(`${ctx.featureDir}/technical-plan.md`);
+      allPlannedFiles = extractImpactedFiles(techPlan);
+      devBatchSize =
+        CONFIG.project.devFileBatchSize || DEFAULT_DEV_FILE_BATCH_SIZE;
+    }
+
+    if (role === 'dev' && allPlannedFiles.length > devBatchSize) {
+      console.log(
+        `  Technical plan touches ${allPlannedFiles.length} files (> ${devBatchSize}) — splitting Dev into batches.`
+      );
+      result = await runDevBatched(
+        slug,
+        ctx,
+        config,
+        systemPrompt,
+        allPlannedFiles,
+        devBatchSize
+      );
+      devBatched = true;
+    } else {
+      const userPrompt = buildUserPrompt(role, slug, ctx, config);
+      console.log('  Calling the LLM API...');
+      result = await callLlm(
+        role,
+        slug,
+        config.model,
+        systemPrompt,
+        userPrompt,
+        config.maxTokens
+      );
+    }
   }
   const { files, artifacts, verdict } = result;
 
   // Record real token spend against this feature's cumulative budget.
-  if (!isDryRun && typeof result.usageTokens === 'number') {
+  // Batched Dev already recorded its own spend per-batch inside
+  // runDevBatched (its abort check needs it up to date between batches) —
+  // skip double-recording here.
+  if (!isDryRun && !devBatched && typeof result.usageTokens === 'number') {
     const usage = loadTokenUsage(ctx.featureDir);
     usage.totalTokens += result.usageTokens;
     usage.calls.push({ role, tokens: result.usageTokens });
@@ -2113,8 +2299,11 @@ async function main() {
   );
   if (verdict) console.log(`  Verdict: ${verdict}`);
 
-  // 6. Apply changes
-  applyChanges(role, files, artifacts, slug, isDryRun);
+  // 6. Apply changes (batched Dev already applied each batch as it went —
+  // see runDevBatched — so nothing left to do here for that case)
+  if (!devBatched) {
+    applyChanges(role, files, artifacts, slug, isDryRun);
+  }
 
   // 7. Summary
   console.log(`\n✅ ${role.toUpperCase()} agent complete for ${slug}`);
@@ -2157,5 +2346,6 @@ export {
   missingRequiredFields,
   trimContextForPrompt,
   evaluateClaudeCliResult,
+  extractImpactedFiles,
 };
 export type { FileChange, ArtifactChange, AgentResult, TokenUsage };

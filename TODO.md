@@ -122,12 +122,26 @@ graceful degradation — a truncated call just fails schema validation and burns
 will hit the same ceiling.
 
 Directions worth exploring (not mutually exclusive):
-- Split Dev's work across multiple calls, one per file (or small batch of files) from the technical plan's
+- ~~Split Dev's work across multiple calls, one per file (or small batch of files) from the technical plan's
   impacted-files list, instead of one call for everything — bounds each call's output size regardless of
-  total feature size, at the cost of more calls/orchestration complexity in run-pipeline.sh.
+  total feature size, at the cost of more calls/orchestration complexity in run-pipeline.sh.~~ **Implemented
+  (2026-07-16).** `agent-runner.ts` now splits Dev into sequential batches of
+  `project.devFileBatchSize` files (default `DEFAULT_DEV_FILE_BATCH_SIZE = 6`) whenever the Architect's
+  technical plan references more impacted files than that — below the threshold, behavior is byte-for-byte
+  identical to before (exactly one call). Each batch's result is applied to disk immediately, so later
+  batches see earlier ones' files the same way a retry sees the previous attempt's output — and
+  `run-pipeline.sh` needs zero changes, since quality gates/commits/retries still run once per external
+  `--role=dev` invocation regardless of how many internal batches it took. Token-budget accounting and the
+  abort-if-over-budget check now happen per-batch (not just once per role invocation), since a batched
+  feature can spend far more than a single call would. See `extractImpactedFiles`, `runDevBatched`, and the
+  `DevBatch` prompt-shaping in `buildUserPrompt` for the implementation; `extractImpactedFiles` has unit
+  tests, the batching loop itself doesn't (same pattern as `callLlm` — the network/CLI-calling shell isn't
+  unit tested, only its pure helpers are). Not yet smoke-tested against a real >6-file feature end-to-end.
 - Detect `finish_reason: "length"` specifically (we already log it) and treat it differently from a generic
   schema-invalid retry: e.g. ask Dev to continue/complete the truncated file list, or explicitly instruct it
-  to prioritize which files matter most if it can't fit everything.
+  to prioritize which files matter most if it can't fit everything. Batching (above) reduces how often this
+  fires per call but doesn't eliminate it — a single file that's itself huge can still truncate.
 - Surface a pre-flight estimate (impacted-file count/size from the technical plan) as a warning before even
   calling Dev, so a human can decide to split the feature into smaller ones rather than discovering the
-  ceiling via a failed, paid call.
+  ceiling via a failed, paid call. Largely superseded by automatic batching, but could still be useful as a
+  visible "this will take N batches" log line before the first call.
