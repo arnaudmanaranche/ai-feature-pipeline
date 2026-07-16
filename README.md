@@ -1,10 +1,10 @@
-# AI Feature Pipeline
+# Relay
 
 **A structured, multi-agent pipeline for AI-assisted feature development. Model-agnostic, stack-agnostic.**
 
 Each role produces artifacts, gates, and handoffs — so shipping a feature with an AI agent looks like shipping one with a team, not a single unreviewed diff.
 
-📖 **[Design principles & guarantees](https://github.com/arnaudmanaranche/ai-feature-pipeline/wiki/Design-Principles-and-Guarantees)** — what AFP actually guarantees (trust, auditability, bounded growth, measurable self-improvement).
+📖 **[Design principles & guarantees](https://github.com/arnaudmanaranche/ai-feature-pipeline/wiki/Design-Principles-and-Guarantees)** — what Relay actually guarantees (trust, auditability, bounded growth, measurable self-improvement).
 
 ```
   SCOPE           CLARIFY         DESIGN          BUILD           REVIEW          VERIFY          LEARN
@@ -31,7 +31,7 @@ npx bmad-method install --custom-source https://github.com/arnaudmanaranche/ai-f
 /start afp-setup
 ```
 
-Or interactively: "Run the AFP Setup skill."
+Or interactively: "Run the Relay setup skill."
 
 </details>
 
@@ -48,7 +48,7 @@ Once set up, start a feature:
 /start afp-pipeline new "Add dark mode toggle"
 ```
 
-Or interactively: "Run the AFP Pipeline to scope a new feature."
+Or interactively: "Run the Relay pipeline to scope a new feature."
 
 ---
 
@@ -261,9 +261,9 @@ If this file is absent, QA is instructed to use `BLOCKED_ENV` rather than fabric
 
 ---
 
-## Why AFP?
+## Why Relay?
 
-AI coding agents default to the shortest path from prompt to diff — which usually means no scoping, no design review, no QA, and no memory of what was tried before. AI Feature Pipeline forces the same discipline a human team applies before merging: a written brief, a reviewed technical plan with a diagram, a code review against that plan, a QA verdict, and a retro that feeds back into the next feature. Every gate exists because skipping it is exactly where an unsupervised agent goes wrong.
+AI coding agents default to the shortest path from prompt to diff — which usually means no scoping, no design review, no QA, and no memory of what was tried before. Relay forces the same discipline a human team applies before merging: a written brief, a reviewed technical plan with a diagram, a code review against that plan, a QA verdict, and a retro that feeds back into the next feature. Every gate exists because skipping it is exactly where an unsupervised agent goes wrong.
 
 ---
 

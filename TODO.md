@@ -20,7 +20,7 @@ judgment), and whether it's a hard gate or an advisory note in the artifact.
 ## iOS — integrate App Store Connect CLI (asc) skills
 
 For iOS projects, the pipeline currently stops at PR creation with no path to TestFlight/App Store distribution —
-shipping a build still means dropping out of AFP into the App Store Connect web UI or a separate Fastlane setup.
+shipping a build still means dropping out of Relay into the App Store Connect web UI or a separate Fastlane setup.
 [asc](https://asccli.sh/#skills) is a single-binary, dependency-free CLI wrapping the App Store Connect API, and
 ships 23 pre-built AI-agent skills covering release submission, TestFlight distribution, build uploads, code
 signing/provisioning, and metadata/screenshot sync across locales.
@@ -30,7 +30,7 @@ detecting an iOS/Expo project in `.ai/config.json`) that invokes the relevant `a
 and kick off TestFlight distribution once QA passes. Needs scoping: which `asc` skills are in scope for a first
 pass (build upload + TestFlight only, vs also metadata/screenshots), how Apple credentials/API keys are supplied
 without landing in `.ai/config.json` in plaintext, and whether this is a hard pipeline stage or an opt-in script
-a human triggers manually after AFP hands off the PR.
+a human triggers manually after Relay hands off the PR.
 
 ## Structural verification of diagram/skill-proposal gates
 
