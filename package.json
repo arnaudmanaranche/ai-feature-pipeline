@@ -5,6 +5,7 @@
   "description": "Dev-only tooling for the AI Feature Pipeline module (not published, not installed by consumers).",
   "scripts": {
     "test": "node --import tsx --test test/*.test.ts test/*.test.mjs",
+    "typecheck": "tsc --noEmit",
     "eval": "node skills/afp-pipeline/scripts/eval-pipeline.mjs"
   },
   "devDependencies": {

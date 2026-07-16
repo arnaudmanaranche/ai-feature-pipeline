@@ -29,7 +29,9 @@ import {
   normalizeArtifactPath,
   missingRequiredFields,
   trimContextForPrompt,
+  evaluateClaudeCliResult,
 } from '../skills/afp-pipeline/scripts/agent-runner.ts';
+import type { TokenUsage } from '../skills/afp-pipeline/scripts/agent-runner.ts';
 
 describe('buildToolSchema', () => {
   test('only the dev role accepts a files array', () => {
@@ -302,7 +304,6 @@ describe('applyChanges — golden write behavior', () => {
       process.chdir(root);
       const originalExit = process.exit;
       let exitCode: number | undefined;
-      // @ts-expect-error — stub process.exit for the duration of this test
       process.exit = (code?: number) => {
         exitCode = code;
         throw new Error('__exit__');
@@ -334,7 +335,6 @@ describe('applyChanges — golden write behavior', () => {
       process.chdir(root);
       const originalExit = process.exit;
       let exitCode: number | undefined;
-      // @ts-expect-error — stub process.exit for the duration of this test
       process.exit = (code?: number) => {
         exitCode = code;
         throw new Error('__exit__');
@@ -389,7 +389,13 @@ describe('loadTokenUsage / saveTokenUsage — disk round-trip', () => {
     try {
       const featureDir = '.ai/artifacts/features/x';
       const initial = loadTokenUsage(featureDir);
-      assert.deepEqual(initial, { totalTokens: 0, calls: [] });
+      // `assert.deepEqual` is typed as an assertion function (`asserts
+      // actual is T`), so it narrows `initial`'s type to match this
+      // literal's inferred type — cast (not `satisfies`, which keeps the
+      // narrow literal type) to TokenUsage, otherwise the empty `calls: []`
+      // narrows to `never[]` and the .push() below fails to typecheck even
+      // though it's runtime-correct.
+      assert.deepEqual(initial, { totalTokens: 0, calls: [] } as TokenUsage);
 
       initial.totalTokens += 500;
       initial.calls.push({ role: 'pm', tokens: 500 });
@@ -417,7 +423,6 @@ describe('validateRegistry — .ai/agents.json schema validation', () => {
     const originalError = console.error;
     const errors: string[] = [];
     let exitCode: number | undefined;
-    // @ts-expect-error — stub for the duration of this test
     process.exit = (code?: number) => {
       exitCode = code;
       throw new Error('__exit__');
@@ -559,6 +564,102 @@ describe('missingRequiredFields — enforcing the schema client-side', () => {
       missingRequiredFields({ artifacts: [], verdict: 'PASS' }, 'review'),
       []
     );
+  });
+});
+
+describe('evaluateClaudeCliResult — claude-cli backend response handling', () => {
+  test('a clean success response with schema-valid structured_output is returned as-is', () => {
+    const data = {
+      is_error: false,
+      terminal_reason: 'completed',
+      structured_output: { artifacts: [{ path: 'foo.md', action: 'create', content: 'x' }] },
+      total_cost_usd: 0.01,
+      usage: { input_tokens: 10, output_tokens: 5 },
+    };
+    const evaluation = evaluateClaudeCliResult(data, 'pm', 'my-feature');
+    assert.equal(evaluation.status, 'success');
+    if (evaluation.status === 'success') {
+      assert.equal(evaluation.result.artifacts.length, 1);
+      assert.equal(evaluation.result.artifacts[0].path, '.ai/artifacts/features/my-feature/foo.md');
+      assert.equal(evaluation.result.usageTokens, 15);
+    }
+  });
+
+  test('is_error:true is retryable, not fatal', () => {
+    const data = { is_error: true, terminal_reason: 'error_during_execution', result: 'boom' };
+    const evaluation = evaluateClaudeCliResult(data, 'pm', 'my-feature');
+    assert.equal(evaluation.status, 'retry');
+  });
+
+  test('a retryable terminal_reason is retryable even when is_error is false', () => {
+    // Found live: max_turns exhaustion can end a run with is_error:false but
+    // no usable structured_output — treat that as retryable, not success.
+    for (const reason of ['max_turns', 'error_max_turns', 'error_during_execution']) {
+      const data = { is_error: false, terminal_reason: reason, structured_output: null };
+      const evaluation = evaluateClaudeCliResult(data, 'pm', 'my-feature');
+      assert.equal(evaluation.status, 'retry', `terminal_reason=${reason} should be retryable`);
+    }
+  });
+
+  test('a completed run with no structured_output at all is retryable', () => {
+    // No structured_output field is treated the same as an empty object by
+    // missingRequiredFields (see the null case above) — the role's required
+    // fields show up as missing rather than a distinct "absent" message.
+    const data = { is_error: false, terminal_reason: 'completed', result: 'some free-form text' };
+    const evaluation = evaluateClaudeCliResult(data, 'pm', 'my-feature');
+    assert.equal(evaluation.status, 'retry');
+    if (evaluation.status === 'retry') {
+      assert.match(evaluation.reason, /artifacts/);
+    }
+  });
+
+  test('structured_output missing a required field (schema hint ignored) is retryable', () => {
+    // Same class of gap as the OpenRouter path: --json-schema is a hint to
+    // the model, not a server-side content check.
+    const data = {
+      is_error: false,
+      terminal_reason: 'completed',
+      structured_output: {},
+      result: '{}',
+    };
+    const evaluation = evaluateClaudeCliResult(data, 'dev', 'my-feature');
+    assert.equal(evaluation.status, 'retry');
+    if (evaluation.status === 'retry') {
+      assert.match(evaluation.reason, /artifacts/);
+      assert.match(evaluation.reason, /files/);
+    }
+  });
+
+  test('usageTokens sums input, cache-read, cache-creation, and output tokens', () => {
+    const data = {
+      is_error: false,
+      terminal_reason: 'completed',
+      structured_output: { artifacts: [] },
+      usage: {
+        input_tokens: 2,
+        cache_read_input_tokens: 100,
+        cache_creation_input_tokens: 50,
+        output_tokens: 8,
+      },
+    };
+    const evaluation = evaluateClaudeCliResult(data, 'pm', 'my-feature');
+    assert.equal(evaluation.status, 'success');
+    if (evaluation.status === 'success') {
+      assert.equal(evaluation.result.usageTokens, 160);
+    }
+  });
+
+  test('missing usage entirely leaves usageTokens undefined rather than 0', () => {
+    const data = {
+      is_error: false,
+      terminal_reason: 'completed',
+      structured_output: { artifacts: [] },
+    };
+    const evaluation = evaluateClaudeCliResult(data, 'pm', 'my-feature');
+    assert.equal(evaluation.status, 'success');
+    if (evaluation.status === 'success') {
+      assert.equal(evaluation.result.usageTokens, undefined);
+    }
   });
 });
 

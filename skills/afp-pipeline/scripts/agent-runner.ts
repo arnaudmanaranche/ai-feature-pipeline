@@ -6,7 +6,7 @@
 // in .ai/config.json for a non-OpenRouter provider
 
 // dotenv is optional — load via dynamic import so the script works without it
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import {
   readFileSync,
   writeFileSync,
@@ -91,7 +91,13 @@ interface ProjectConfig {
   // shape. `baseUrl` defaults to OpenRouter's for backward compatibility;
   // point it elsewhere to swap providers without touching the call site.
   llm: {
+    // 'claude-cli' shells out to the Claude Code CLI itself (`claude -p`)
+    // instead of hitting an HTTP endpoint — for users whose only credential
+    // is a Claude subscription (via `claude setup-token`), no API key.
+    // Defaults to 'openai-compatible' for back-compat with existing configs.
+    backend?: 'openai-compatible' | 'claude-cli';
     baseUrl: string;
+    // Not read/required when backend is 'claude-cli'.
     apiKeyEnv: string;
     model: string;
     refererUrl: string;
@@ -108,6 +114,9 @@ interface ProjectConfig {
       ignore?: string[];
       allow_fallbacks?: boolean;
     };
+    // Per-call spend cap in USD, passed to `claude -p --max-budget-usd`.
+    // Only meaningful when backend is 'claude-cli'.
+    maxBudgetUsd?: number;
   };
   sourceDirs: string[];
   skipDirs: string[];
@@ -1201,9 +1210,203 @@ function parseToolArgs(argsRaw: string, role: string, slug: string): AgentResult
   };
 }
 
-// --- LLM API (generic OpenAI-compatible chat-completions + tool-calling) ---
+// --- LLM API dispatch ---
 
 async function callLlm(
+  role: string,
+  slug: string,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number
+): Promise<AgentResult> {
+  if (CONFIG.llm.backend === 'claude-cli') {
+    return callLlmViaClaudeCli(role, slug, model, systemPrompt, userPrompt);
+  }
+  return callLlmViaOpenAiCompatible(
+    role,
+    slug,
+    model,
+    systemPrompt,
+    userPrompt,
+    maxTokens
+  );
+}
+
+// --- Backend: Claude Code CLI (subscription auth, no API key) ---
+//
+// Shells out to `claude -p` instead of an HTTP fetch(), for users whose only
+// credential is a Claude subscription (via `claude setup-token`). Same
+// AgentResult contract as the OpenAI-compatible path: schema-validated JSON
+// in, AgentResult out — retries on the same kinds of transient failures,
+// just keyed off exit code / `is_error` instead of HTTP status.
+//
+// `--tools ""` disables the CLI's own built-in tools (Edit/Bash/Write/etc)
+// deliberately — this call site only wants a single structured JSON answer
+// back; agent-runner.ts applies the resulting file/artifact changes itself,
+// exactly as it does for the OpenRouter path. Letting the CLI use its own
+// tools here would duplicate (and could conflict with) that.
+const CLAUDE_CLI_RETRYABLE_TERMINAL_REASONS = new Set([
+  'max_turns',
+  'error_max_turns',
+  'error_during_execution',
+]);
+
+type ClaudeCliEvaluation =
+  | { status: 'success'; result: AgentResult }
+  | { status: 'retry'; reason: string };
+
+// Pure decision logic for a single `claude -p ... --output-format json`
+// invocation's parsed stdout — separated from callLlmViaClaudeCli's
+// execFileSync/retry-loop/console-logging shell so it can be unit tested
+// against crafted CLI responses without actually spawning the CLI.
+function evaluateClaudeCliResult(
+  data: any,
+  role: string,
+  slug: string
+): ClaudeCliEvaluation {
+  if (data.is_error || CLAUDE_CLI_RETRYABLE_TERMINAL_REASONS.has(data.terminal_reason)) {
+    return {
+      status: 'retry',
+      reason: `claude CLI reported an error (terminal_reason: ${data.terminal_reason}): ${data.result ?? JSON.stringify(data)}`,
+    };
+  }
+
+  // `--json-schema` should always populate `structured_output` on success,
+  // but nothing server-side guarantees it satisfies the schema's `required`
+  // fields — same class of gap the OpenRouter path guards against with
+  // missingRequiredFields(). Treat a missing field here as schema-invalid
+  // and retry, not a silent empty AgentResult.
+  const structured = data.structured_output;
+  const missing = missingRequiredFields(structured, role);
+  if (!structured || missing.length > 0) {
+    return {
+      status: 'retry',
+      reason: `claude CLI structured_output missing required field(s): ${missing.join(', ') || '(no structured_output at all)'} (raw: ${data.result})`,
+    };
+  }
+
+  const argsRaw = JSON.stringify(structured);
+  const result = parseToolArgs(argsRaw, role, slug);
+  if (typeof data.usage?.output_tokens === 'number') {
+    const inputTokens =
+      (data.usage.input_tokens ?? 0) +
+      (data.usage.cache_read_input_tokens ?? 0) +
+      (data.usage.cache_creation_input_tokens ?? 0);
+    result.usageTokens = inputTokens + data.usage.output_tokens;
+  }
+  return { status: 'success', result };
+}
+
+async function callLlmViaClaudeCli(
+  role: string,
+  slug: string,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string
+): Promise<AgentResult> {
+  const MAX_RETRIES = 3;
+  const BASE_DELAY = 2000;
+  const schema = buildToolSchema(role);
+
+  console.log(`  Model: ${model} (backend: claude-cli)`);
+  console.log(`  System prompt: ~${systemPrompt.length} chars`);
+  console.log(`  User prompt: ~${userPrompt.length} chars`);
+
+  let lastError = '';
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const args = [
+      '-p',
+      userPrompt,
+      '--system-prompt',
+      systemPrompt,
+      '--model',
+      model,
+      '--output-format',
+      'json',
+      '--json-schema',
+      JSON.stringify(schema),
+      '--tools',
+      '',
+      '--no-session-persistence',
+    ];
+    if (CONFIG.llm.maxBudgetUsd) {
+      args.push('--max-budget-usd', String(CONFIG.llm.maxBudgetUsd));
+    }
+
+    let stdout: string;
+    try {
+      stdout = execFileSync('claude', args, {
+        encoding: 'utf-8',
+        maxBuffer: 64 * 1024 * 1024,
+      });
+    } catch (err: any) {
+      // A non-zero exit still writes its JSON result to stdout in most
+      // failure modes (e.g. is_error:true) — only fall back to the raw
+      // error message when stdout truly has nothing usable.
+      stdout = err?.stdout?.toString?.() ?? '';
+      if (!stdout) {
+        lastError = `claude CLI invocation failed: ${err?.message ?? String(err)}`;
+        if (attempt < MAX_RETRIES) {
+          const delay = BASE_DELAY * Math.pow(2, attempt - 1);
+          console.warn(
+            `  claude CLI error (attempt ${attempt}/${MAX_RETRIES}): ${lastError}. Retrying in ${delay}ms...`
+          );
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        console.error(
+          `claude CLI kept failing after ${MAX_RETRIES} attempts: ${lastError}`
+        );
+        process.exit(1);
+      }
+    }
+
+    let data: any;
+    try {
+      data = JSON.parse(stdout);
+    } catch (err) {
+      lastError = `claude CLI returned non-JSON output: ${err instanceof Error ? err.message : String(err)}`;
+      console.error(lastError);
+      console.error(stdout);
+      process.exit(1);
+    }
+
+    const evaluation = evaluateClaudeCliResult(data, role, slug);
+
+    if (evaluation.status === 'retry') {
+      lastError = evaluation.reason;
+      if (attempt < MAX_RETRIES) {
+        const delay = BASE_DELAY * Math.pow(2, attempt - 1);
+        console.warn(
+          `  claude CLI issue (attempt ${attempt}/${MAX_RETRIES}): ${lastError}. Retrying in ${delay}ms...`
+        );
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      console.error(
+        `claude CLI kept failing after ${MAX_RETRIES} attempts: ${lastError}`
+      );
+      process.exit(1);
+    }
+
+    console.log(`  Cost: $${data.total_cost_usd ?? 'unknown'}`);
+    if (data.usage) {
+      console.log(`  Usage: ${JSON.stringify(data.usage)}`);
+    }
+    if (typeof evaluation.result.usageTokens === 'number') {
+      console.log(`  Tokens used this call: ${evaluation.result.usageTokens}`);
+    }
+    return evaluation.result;
+  }
+
+  console.error(`claude CLI error (exhausted retries): ${lastError}`);
+  process.exit(1);
+}
+
+// --- Backend: generic OpenAI-compatible chat-completions + tool-calling ---
+
+async function callLlmViaOpenAiCompatible(
   role: string,
   slug: string,
   model: string,
@@ -1287,7 +1490,7 @@ async function callLlm(
     }
 
     if (response.ok) {
-      const data = await response.json();
+      const data: any = await response.json();
       if (data.usage) {
         console.log(`  Usage: ${JSON.stringify(data.usage)}`);
       }
@@ -1953,5 +2156,6 @@ export {
   normalizeArtifactPath,
   missingRequiredFields,
   trimContextForPrompt,
+  evaluateClaudeCliResult,
 };
 export type { FileChange, ArtifactChange, AgentResult, TokenUsage };

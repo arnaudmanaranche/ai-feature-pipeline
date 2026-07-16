@@ -188,6 +188,16 @@ OPENROUTER_MODEL_DEV=anthropic/claude-opus-4.6 bash skills/afp-pipeline/scripts/
 
 The env var name is `OPENROUTER_MODEL_<ROLE>` with the role's hyphens replaced by underscores (`dev-review` → `OPENROUTER_MODEL_DEV_REVIEW`). The same convention applies to `AFP_SKILL_<ROLE>`, which points a role at an alternate prompt file for A/B experiments (see **Self-improvement loop** below) — e.g. `AFP_SKILL_PM=.ai/experiments/pm-v2.md`.
 
+### Running headless with only a Claude subscription (no API key)
+
+Set `llm.backend` to `"claude-cli"` in `.ai/config.json` to have `run-pipeline.sh`/`agent-runner.ts` shell out to the Claude Code CLI itself (`claude -p ... --json-schema ...`) for every model call, instead of hitting an HTTP endpoint. This keeps every safety mechanism the headless pipeline has — worktree isolation, quality gates, retries, structured-output schema validation, per-role write permissions, the concurrency lock, the token budget — but needs zero `OPENROUTER_API_KEY`/`apiKeyEnv`. Instead, authenticate once with:
+
+```bash
+claude setup-token
+```
+
+which creates a long-lived token backed by your Claude subscription. `llm.baseUrl`/`llm.apiKeyEnv` are ignored for this backend; `llm.maxBudgetUsd` (optional) caps spend per individual model call via `claude -p --max-budget-usd`.
+
 ### Customizing the Dev agent per file type or language
 
 The `dev` role in `.ai/agents.json` supports `typeSkills` (inject a coding-standards file only when Dev touches a matching file path or extension — `*.ts` vs `*.tsx` vs `*.js`, or a directory like `src/services`) and `extraSkills` (inject a file on every Dev run, regardless of what's touched). No other role supports this — only Dev writes source code. See **Dev-only: `typeSkills` and `extraSkills`** in `skills/afp-setup/SKILL.md` for the exact config shape and matching rules.

@@ -77,12 +77,33 @@ retries, structured-output schema validation, per-role write permissions, the co
 budget. All of that is headless-script-only today, and the headless script only knows how to hit a raw HTTP
 API — which requires a key.
 
-Worth exploring: a third execution backend, alongside OpenRouter and generic-OpenAI-compatible, that invokes
-the Claude Code CLI itself in a scriptable/non-interactive way (if/however it supports that) as the model call
-inside `run-pipeline.sh`'s loop, instead of a `fetch()` to an HTTP endpoint. That would let someone whose only
-credential is their Claude subscription keep every safety mechanism built this session, with zero API key.
-Needs research into what Claude Code's CLI actually exposes for scripted/headless invocation before scoping
-further.
+**Research done (2026-07-16) — this is buildable, not just an idea:**
+
+- `claude setup-token` creates a long-lived auth token, explicitly documented as "requires Claude
+  subscription" — the credential path for a subscription-only user, no `ANTHROPIC_API_KEY` involved.
+- `claude -p "<prompt>" --output-format json --model sonnet` runs one non-interactive turn and exits,
+  printing a single JSON object (`result`, `session_id`, `total_cost_usd`, `usage`, `stop_reason`,
+  `is_error`, ...). Confirmed live.
+- `--json-schema '<schema>'` forces structured output validated against that schema and returns it in a
+  `structured_output` field — confirmed live by passing it a toy schema. This maps directly onto the JSON
+  Schema `buildToolSchema(role)` already builds in `agent-runner.ts:1085` for the OpenRouter
+  `tool_choice: {type:'function', name:'submit_changes'}` path — same contract, different transport.
+- Also relevant: `--system-prompt`/`--append-system-prompt`, `--no-session-persistence`, `--max-budget-usd`
+  (print-mode only, per-call $ cap — fits the pipeline's existing token-budget concern), `--tools ""` (this
+  call site only wants a JSON answer back, not the CLI's own Edit/Bash/Write access — `agent-runner.ts`
+  applies file changes itself afterward, same as the OpenRouter path today).
+- Worktree isolation, the concurrency lock, and `--dry-run` all live in `run-pipeline.sh` at the shell/git
+  level and are backend-agnostic — no changes needed there. Retry logic and `missingRequiredFields`
+  validation in `agent-runner.ts` are also backend-agnostic; they just need whichever backend to hand back
+  `argsRaw` JSON.
+
+**Proposed shape:** add `CONFIG.llm.backend: 'openrouter' | 'openai-compatible' | 'claude-cli'` (no such
+switch exists today — `stack.backend` at `agent-runner.ts:69` is the *app's* backend, unrelated). For
+`claude-cli`, `callLlm` spawns `claude -p <userPrompt> --system-prompt <systemPrompt> --model <model>
+--output-format json --json-schema <schema> --tools "" --no-session-persistence [--max-budget-usd ...]`
+instead of `fetch()`, and reads `structured_output` instead of
+`data.choices[0].message.tool_calls[0]`. Retryable conditions become non-zero exit code / `is_error: true`
+instead of HTTP status codes. Currently being implemented — see in-progress work in this session.
 
 ## Dev's one-shot "full file content per touched file, in one JSON response" doesn't scale
 
