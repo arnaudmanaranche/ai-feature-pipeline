@@ -1,0 +1,21 @@
+{
+  "name": "relay-teaser-video",
+  "private": true,
+  "type": "module",
+  "description": "Remotion source for the Relay social teaser video. Not part of the published module.",
+  "scripts": {
+    "dev": "remotion studio",
+    "build": "remotion render Teaser out/teaser.mp4",
+    "still": "remotion still"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.230",
+    "@remotion/cli": "^4.0.230"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "typescript": "^5.6.0"
+  }
+}
