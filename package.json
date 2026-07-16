@@ -1,5 +1,5 @@
 {
-  "name": "ai-feature-pipeline-dev",
+  "name": "relay",
   "private": true,
   "type": "module",
   "description": "Dev-only tooling for the AI Feature Pipeline module (not published, not installed by consumers).",

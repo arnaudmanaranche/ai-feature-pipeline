@@ -1,13 +1,13 @@
 {
-  "name": "ai-feature-pipeline",
+  "name": "relay",
   "owner": { "name": "AI Feature Pipeline" },
   "license": "MIT",
-"homepage": "https://github.com/arnaudmanaranche/ai-feature-pipeline",
-"repository": "https://github.com/arnaudmanaranche/ai-feature-pipeline",
+"homepage": "https://github.com/arnaudmanaranche/relay",
+"repository": "https://github.com/arnaudmanaranche/relay",
   "keywords": ["bmad", "feature-pipeline", "ai-workflow", "software-engineering"],
   "plugins": [
     {
-      "name": "ai-feature-pipeline",
+      "name": "relay",
       "source": "./",
       "description": "Multi-agent feature development pipeline: PM → Architect → Dev → Review → QA",
       "version": "1.0.0",

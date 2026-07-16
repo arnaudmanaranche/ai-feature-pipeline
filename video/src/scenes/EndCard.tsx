@@ -59,7 +59,7 @@ export const EndCard: React.FC = () => {
             letterSpacing: '0.03em',
           }}
         >
-          github.com/arnaudmanaranche/ai-feature-pipeline
+          github.com/arnaudmanaranche/relay
         </div>
       </div>
     </AbsoluteFill>

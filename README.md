@@ -4,7 +4,7 @@
 
 Each role produces artifacts, gates, and handoffs — so shipping a feature with an AI agent looks like shipping one with a team, not a single unreviewed diff.
 
-📖 **[Design principles & guarantees](https://github.com/arnaudmanaranche/ai-feature-pipeline/wiki/Design-Principles-and-Guarantees)** — what Relay actually guarantees (trust, auditability, bounded growth, measurable self-improvement).
+📖 **[Design principles & guarantees](https://github.com/arnaudmanaranche/relay/wiki/Design-Principles-and-Guarantees)** — what Relay actually guarantees (trust, auditability, bounded growth, measurable self-improvement).
 
 ```
   SCOPE           CLARIFY         DESIGN          BUILD           REVIEW          VERIFY          LEARN
@@ -21,7 +21,7 @@ Each role produces artifacts, gates, and handoffs — so shipping a feature with
 **Prerequisites:** Node.js 18+, an AI coding tool (Claude Code, Codex, OpenCode, Cline), and a BMad Method installation (`npx bmad-method`).
 
 ```bash
-npx bmad-method install --custom-source https://github.com/arnaudmanaranche/ai-feature-pipeline
+npx bmad-method install --custom-source https://github.com/arnaudmanaranche/relay
 ```
 
 <details>
